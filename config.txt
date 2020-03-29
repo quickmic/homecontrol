@@ -11,6 +11,7 @@ MQTTPassword=password
 #initscript=/opt/homecontrol/scripts/pre-start.sh
 WaitForStatusUpdate=10
 #startdelay=10
+logfile=/var/log/homecontrol.log
 
 [MQTT Client]
 #local IP address -> this PC
@@ -29,9 +30,9 @@ IP=x.x.x.x
 #NeutrinoEPGPath0=/var/www/multimedia/neutrino.epg
 
 [sunset]
-#Latitude=46.9930883
-#Longitude=15.207952
-
+#AstroLatitude=43.9124383
+#AstroLongitude=13.456652
+#AstroID=Astro
 
 [bmp180]
 #http://yoursmartiot.blogspot.com/2016/03/bmp180-i2c-digital-barometric-pressure.html

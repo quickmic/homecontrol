@@ -1,0 +1,9 @@
+[Unit]
+Description=Homecontrol
+
+[Service]
+Type=simple
+ExecStart=/opt/homecontrol/homecontrol.py
+
+[Install]
+WantedBy=multi-user.target
