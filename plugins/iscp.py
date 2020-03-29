@@ -8,12 +8,14 @@ except:
 import multiprocessing
 import time
 import socket
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 ISCP_DISCONNECTED = 0x00
 ISCP_TIMEOUT = 0x01
@@ -50,8 +52,7 @@ class Controller(multiprocessing.Process):
 			self.EventsThread.terminate()
 			self.EventsThread.join()
 			self.EventsThread.close()
-
-			print("Close")
+			self.Settings[SETTINGS_LOGGER].debug("ISCP Close")
 		except:
 			None
 
@@ -67,7 +68,7 @@ class Controller(multiprocessing.Process):
 		self.socketISCP.settimeout(5)
 
 		while Connected == False:
-			print("ISCP connecting...")
+			self.Settings[SETTINGS_LOGGER].debug("ISCP connecting...")
 
 			try:
 				self.socketISCP.connect((self.Settings["iscpip" + self.Index], int(self.Settings["iscpport" + self.Index])))
@@ -77,24 +78,29 @@ class Controller(multiprocessing.Process):
 
 			time.sleep(5)
 			Connected = True
-			print("ISCP connected")
-			self.ComQueue[MQTT].put([MQTT_PUBLISH, self.Settings["iscpip" + self.Index].replace(".", "-") + "/online", "1"])
-			self.ComQueue[self.IDInternal].put(["init"])
 
+		self.Settings[SETTINGS_LOGGER].debug("ISCP connected")
 		time.sleep(2)
 		self.EventsThread = Events(self.ComQueue, self.Settings, self.Channels, self.IDInternal, self.IDExternal, self.Index, self.socketISCP)
 		self.EventsThread.start()
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.Settings["iscpip" + self.Index].replace(".", "-") + "/online", "1"])
+		self.ComQueue[self.IDInternal].put(["init"])
 
 	def run(self):
 		if SETPROCTITLE:
 			setproctitle.setproctitle('homecontrol-iscp-commands-' + self.Index)
 
 		self.IDExternal = self.Settings["iscpid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
 		time.sleep(int(self.Settings["waitforstatusupdate"]))
-		PWRToggleState = ""
+		PWRToggleState = "-1"
 		self.Channels = []
+
+		#Drop all Updates on Start
+		while not self.ComQueue[self.IDInternal].empty():
+			self.ComQueue[self.IDInternal].get()
+
 		self.Connect()
 
                 #Load Channels
@@ -105,20 +111,20 @@ class Controller(multiprocessing.Process):
 			else:
 				break
 
-		#Drop all Updates on Start
-		while not self.ComQueue[self.IDInternal].empty():
-			self.ComQueue[self.IDInternal].get()
-
 		while True:
 			IncommingData = self.ComQueue[self.IDInternal].get()
+			self.Settings[SETTINGS_LOGGER].debug("ISCP incomming command: " + str(IncommingData))
 
 			if IncommingData[0] == "init":
+				self.Settings[SETTINGS_LOGGER].debug("ISCP init")
+				self.SendData("ISCP\x00\x00\x00\x10\x00\x00\x00" + chr(10) + "\x01\x00\x00\x00!1DIFQSTN\x0D") #Use Display query as init indicator
+
 				for i in range(0, len(self.Channels)):
 					time.sleep(0.01)
-					self.SendData("ISCP" + "\x00\x00\x00\x10\x00\x00\x00" + chr(len(self.Channels[i]) + 7) + "\x01\x00\x00\x00!1" + self.Channels[i] + "QSTN\x0D")
+					self.SendData("ISCP\x00\x00\x00\x10\x00\x00\x00" + chr(len(self.Channels[i]) + 7) + "\x01\x00\x00\x00!1" + self.Channels[i] + "QSTN\x0D")
 			elif IncommingData[0] == ISCP_DISCONNECTED:
+				PWRToggleState = "-1"
 				self.Connect()
-
 			elif IncommingData[0] == "*":
 				if IncommingData[1] == "undefined": #only accapt undefined state for all channels
 					for i in range(0, len(self.Channels)):
@@ -127,14 +133,17 @@ class Controller(multiprocessing.Process):
 			elif IncommingData[0] == "powertoggle":
 				if PWRToggleState != IncommingData[1]:
 					PWRToggleState = IncommingData[1]
+					self.Settings[SETTINGS_LOGGER].debug("ISCP Powertoggle update: " + str(IncommingData))
 				else:
+					self.Settings[SETTINGS_LOGGER].debug("ISCP Powertoggle continue")
 					continue
 
 				if IncommingData[1] == "1":
 					for i in range(0, len(self.Channels)):
 						if self.Channels[i] != "PWR":
 							time.sleep(0.01)
-							self.SendData("ISCP" + "\x00\x00\x00\x10\x00\x00\x00" + chr(len(self.Channels[i]) + 7) + "\x01\x00\x00\x00!1" + self.Channels[i] + "QSTN\x0D")
+							self.SendData("ISCP\x00\x00\x00\x10\x00\x00\x00" + chr(len(self.Channels[i]) + 7) + "\x01\x00\x00\x00!1" + self.Channels[i] + "QSTN\x0D")
+							self.Settings[SETTINGS_LOGGER].debug("ISCP State request")
 				else:
 					for i in range(0, len(self.Channels)):
 						if self.Channels[i] != "PWR":
@@ -154,7 +163,7 @@ class Controller(multiprocessing.Process):
 						Value = "0" + Value
 
 					iscp_message = iscp_message + Value
-					self.SendData("ISCP" + "\x00\x00\x00\x10\x00\x00\x00" + chr(len(iscp_message) + 3) + "\x01\x00\x00\x00!1" + iscp_message + "\x0D")
+					self.SendData("ISCP\x00\x00\x00\x10\x00\x00\x00" + chr(len(iscp_message) + 3) + "\x01\x00\x00\x00!1" + iscp_message + "\x0D")
 
 					#Design Power function as toggle for all other Functions
 					if IncommingData[0] == "pwr":
@@ -170,6 +179,7 @@ class Events(multiprocessing.Process):
 		self.IDInternal = IDInternal
 		self.IDExternal = IDExternal
 		self.socketISCP = socketISCP
+		self.Status = {}
 
 	def run(self):
 		if SETPROCTITLE:
@@ -177,16 +187,20 @@ class Events(multiprocessing.Process):
 
 		MaxVolumeFactor = 1 / float(self.Settings["iscpmaxvolume" + self.Index])
 		Data = ""
+		Init = True
 
 		while True:
 			try:
 				Data = self.socketISCP.recv(128)
+				self.Settings[SETTINGS_LOGGER].debug("ISCP incomming message: " + str(Data))
 
 				if not Data:
 					self.ComQueue[self.IDInternal].put([ISCP_DISCONNECTED])
 					continue
 			except socket.timeout:
 				if Data == ISCP_TIMEOUT:
+					self.Settings[SETTINGS_LOGGER].debug("ISCP timeout")
+
 					#Disable all channels
 					for i in range(0, len(self.Channels)):
 						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + self.Channels[i], "undefined"])
@@ -196,9 +210,10 @@ class Events(multiprocessing.Process):
 					return
 
 				Data = ISCP_TIMEOUT
-				self.socketISCP.send(("ISCP" + "\x00\x00\x00\x10\x00\x00\x00" + chr(10) + "\x01\x00\x00\x00!1PWRQSTN\x0D").encode()) #Use PWR query as keepalive
+				self.socketISCP.send(("ISCP\x00\x00\x00\x10\x00\x00\x00" + chr(10) + "\x01\x00\x00\x00!1PWRQSTN\x0D").encode()) #Use PWR query as keepalive
 				continue
 			except socket.error:
+				self.Settings[SETTINGS_LOGGER].debug("ISCP disconnected")
 				self.ComQueue[self.IDInternal].put([ISCP_DISCONNECTED])
 				continue
 
@@ -220,6 +235,47 @@ class Events(multiprocessing.Process):
 
 					#Refesh Power Toggle
 					if ID == "PWR":
-						self.ComQueue[self.IDInternal].put(["powertoggle", Value])
+						if Value == "01":
+							Value = "1"
+						else:
+							Value = "0"
 
-				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + ID, Value])
+							self.Status = {} #Force refresh all states after PWR is back on
+
+
+							if not Init:
+								self.Status["PWR"] = "0" #but keep PWR state
+
+							Init = False
+
+				if ID in self.Status:
+					if self.Status[ID] != Value:
+						Refresh = True
+					else:
+						Refresh = False
+				else:
+					Refresh = True
+
+				if Refresh:
+					self.Settings[SETTINGS_LOGGER].debug("ISCP send State: " + str([MQTT_PUBLISH, self.IDExternal + ID, Value]))
+
+					#Refesh Power Toggle
+					if ID == "PWR":
+						self.ComQueue[self.IDInternal].put(["powertoggle", Value])
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + ID, Value])
+
+					elif ID == "DIF":
+						#DIF request used s init indication
+						self.Settings[SETTINGS_LOGGER].debug("ISCP init triggered")
+						self.Status = {}
+						continue
+					else:
+						if "PWR" in self.Status:
+							if self.Status["PWR"] != "0":
+								self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + ID, Value])
+							else:
+								self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + ID, "undefined"])
+						else:
+							self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + ID, "undefined"])
+
+					self.Status[ID] = Value

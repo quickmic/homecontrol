@@ -9,9 +9,11 @@ import multiprocessing
 import time
 import socket
 import struct
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	for i in range(0, 500):
@@ -94,4 +96,5 @@ class Controller(multiprocessing.Process):
 
 			if Online != OnlineOld:
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, PingID, Online])
+				self.Settings[SETTINGS_LOGGER].debug("Ping: " + str(PingID) + " " + str(Online))
 				OnlineOld = Online

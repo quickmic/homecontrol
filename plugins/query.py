@@ -12,11 +12,13 @@ import urllib.request
 import subprocess
 import signal
 import os
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	for i in range(0, 25):
@@ -41,7 +43,7 @@ class Controller(multiprocessing.Process):
 		Delay = int(self.Settings["queryinterval" + self.Index])
 		Query = self.Settings["query" + self.Index]
 		IDExternal = self.Settings["queryid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		Online = -1
 
 		if Query.find("http") != -1:
@@ -63,6 +65,7 @@ class Controller(multiprocessing.Process):
 
 					if Online != 1:
 						self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "online", "1"])
+						self.Settings[SETTINGS_LOGGER].debug("Query: " + Query + " online")
 						Online = 1
 
 
@@ -89,10 +92,12 @@ class Controller(multiprocessing.Process):
 
 								DataTemp[str(item)] = str(data[item])
 								self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + str(item), str(data[item])])
+								self.Settings[SETTINGS_LOGGER].debug("Query: " + Query + " " + str(item) + " " + str(data[item]))
 
 						data = dataTemp
 				except:
 					if Online != 0:
+						self.Settings[SETTINGS_LOGGER].debug("Query: " + Query + " offline")
 						self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "online", "0"])
 						Online = 0
 			else:
@@ -100,3 +105,5 @@ class Controller(multiprocessing.Process):
 				data = Process.stdout.readline()
 				data = data.decode(encoding='ascii')
 				os.killpg(os.getpgid(Process.pid), signal.SIGTERM)
+
+				self.Settings[SETTINGS_LOGGER].debug("Query command data: " + str(data))

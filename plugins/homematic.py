@@ -7,6 +7,7 @@ except:
 
 import multiprocessing
 import time
+import logging
 from xmlrpc.server import SimpleXMLRPCServer
 import xmlrpc.client
 
@@ -15,7 +16,7 @@ MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
-
+SETTINGS_LOGGER = 0x02
 HOMEMATIC_PING = 0x00
 HOMEMATIC_UPDATELEVELLAST = 0x01
 
@@ -60,7 +61,7 @@ class Controller(multiprocessing.Process):
 		for i in range(0, len(DeviceList)):
 			temp = str(DeviceList[i])
 
-			if temp.find("BidCoS") == -1 and temp.find(":") != -1 and temp.find("*") == -1:
+			if temp.find("BidCoS") == -1 and temp.find(":") != -1:
 				pos = temp.find("'ADDRESS': '")
 				temp = temp[pos+12:]
 				pos = temp.find("'")
@@ -69,6 +70,10 @@ class Controller(multiprocessing.Process):
 
 				try:
 					temp = str(self.proxy.getParamset(temp, "VALUES"))
+
+					if temp == "{}":
+						continue
+
 					DeviceData = temp.split(",")
 
 					for j in range(0, len(DeviceData)):
@@ -91,6 +96,7 @@ class Controller(multiprocessing.Process):
 							elif Value.lower() == "false":
 								Value = "0"
 
+							self.Settings[SETTINGS_LOGGER].debug("Homematic read data: " + Address + "/" + Parameter + " - " + str(Value))
 							self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + Address + "/" + Parameter, Value])
 				except:
 					None
@@ -107,16 +113,16 @@ class Controller(multiprocessing.Process):
 				except:
 					None
 
-				print("Homematic Connecting...")
+				self.Settings[SETTINGS_LOGGER].debug("Homematic Connecting...")
 				self.proxy = xmlrpc.client.ServerProxy('http://' + self.IP + ':' + str(self.Port))
 				time.sleep(2)
 				self.proxy.init(self.IP + ":" + str(50100 + int(self.Index)), 'homecontrol-' + self.Index)
 				Connected = True
 				self.KeepAlivePingThread = KeepAlivePing(self.ComQueue, self.IDInternal, self.Index) #Init Status Update Timer
 				self.KeepAlivePingThread.start()
-				print("Homematic Connection established...")
+				self.Settings[SETTINGS_LOGGER].debug("Homematic Connection established...")
 			except:
-				print("Homematic Connection failed")
+				self.Settings[SETTINGS_LOGGER].debug("Homematic Connection failed")
 				time.sleep(5)
 
 	def run(self):
@@ -124,7 +130,7 @@ class Controller(multiprocessing.Process):
 			setproctitle.setproctitle('homecontrol-homematic-commands-' + self.Index)
 
 		self.IDExternal = self.Settings["homematicid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
 		self.IP = self.Settings["homematicip" + self.Index]
 		self.Port = int(self.Settings["homematicport" + self.Index])
@@ -147,29 +153,24 @@ class Controller(multiprocessing.Process):
 
 		for i in range (0, len(InitCommands)):
 			temp = InitCommands[i]
-			temp2 = temp
-#			temp2 = temp.split("|")
 
 			if temp[0] == "init":
-
-				print("INIT REC1")
-
-				self.ComQueue[self.IDInternal].put([temp])
-
-			if temp2[0] == HOMEMATIC_PING:
+				self.Settings[SETTINGS_LOGGER].debug("Homematic INIT")
+				self.ComQueue[self.IDInternal].put(temp)
+			elif temp[0] == HOMEMATIC_PING:
 				None
-
 			elif temp[0].find("levellast") != -1:
-				temp10 = temp2[0].replace("/levellast", "")
-				self.SliderLevel[temp10] = temp2[1]
+				temp10 = temp[0].replace("/levellast", "")
+				self.SliderLevel[temp10] = temp[1]
 			else:
 				#Save channels
-				self.Channels.append(temp2[0].upper())
+				self.Channels.append(temp[0].upper())
 
 		while True:
-			temp2 = self.ComQueue[self.IDInternal].get()
+			IncommingData = self.ComQueue[self.IDInternal].get()
+#			self.Settings[SETTINGS_LOGGER].debug("Homematic incomming command: " + str(IncommingData))
 
-			if temp2[0] == HOMEMATIC_PING:
+			if IncommingData[0] == HOMEMATIC_PING:
 				try:
 					self.proxy.ping("1")
 				except:
@@ -181,33 +182,41 @@ class Controller(multiprocessing.Process):
 					self.Connect()
 					self.ReadData()
 					continue
-			elif temp2[0] == "init":
+			elif IncommingData[0] == "init":
+				self.Settings[SETTINGS_LOGGER].debug("Homematic incomming command: init")
 				self.ReadData()
-			elif temp2[0] == HOMEMATIC_UPDATELEVELLAST:
-				self.SliderLevel[temp2[1]] = temp2[2]
-			elif temp2[0].find("levellasttoggle") != -1:
-				temp3 = temp2[0].split("/")
+			elif IncommingData[0] == HOMEMATIC_UPDATELEVELLAST:
+				self.Settings[SETTINGS_LOGGER].debug("Homematic incomming command: HOMEMATIC_UPDATELEVELLAST")
+				self.SliderLevel[IncommingData[1]] = IncommingData[2]
+			elif IncommingData[0].find("levellasttoggle") != -1:
+				self.Settings[SETTINGS_LOGGER].debug("Homematic incomming command: LEVELLASTTOGGLE")
+				temp3 = IncommingData[0].split("/")
 
-				if temp2[1] == "0":
+				if IncommingData[1] == "0":
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + temp3[0].upper() + "/" + "LEVELLASTTOGGLE", "0"])
 					Value = "0"
 				else:
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + temp3[0].upper() + "/" + "LEVELLASTTOGGLE", "1"])
-					temp4 = temp2[0].replace("/levellasttoggle", "")
+					temp4 = IncommingData[0].replace("/levellasttoggle", "")
 					Value = self.SliderLevel[temp4]
 
 				self.proxy.setValue(temp3[0].upper(), "LEVEL", Value)
 			else:
-				temp3 = temp2[0].split("/")
-				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + temp3[0].upper() + "/" + temp3[1].upper(), temp2[1]])
+				self.Settings[SETTINGS_LOGGER].debug("Homematic incomming command: " + str(IncommingData))
+				temp3 = IncommingData[0].split("/")
+				SendData = IncommingData[1]
 
 				if temp3[1] == "state":
-					if temp2[1] == "1":
-						temp2[1] = True
+					if SendData == "1":
+						SendData = True
 					else:
-						temp2[1] = False
+						SendData = False
 
-				self.proxy.setValue(temp3[0].upper(), temp3[1].upper(), temp2[1])
+				try:
+					self.proxy.setValue(temp3[0].upper(), temp3[1].upper(), SendData)
+					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + temp3[0].upper() + "/" + temp3[1].upper(), IncommingData[1]])
+				except:
+					self.Settings[SETTINGS_LOGGER].debug("Homematic device offline: " + str(IncommingData))
 
 class Events(multiprocessing.Process):
 	def __init__(self, ComQueue, Settings, IDInternal, IDExternal, Index):
@@ -222,6 +231,8 @@ class Events(multiprocessing.Process):
 
 	def event(self, interface_id, address, value_key, value):
 		if value_key.lower() != "pong":
+			self.Settings[SETTINGS_LOGGER].debug("Homematic incomming message: " + str(interface_id) + " - " +  str(address) + " - " +  str(value_key) + " - " +  str(value))
+
 			if str(value).lower() == "true":
 				Value = "1"
 			elif str(value).lower() == "false":

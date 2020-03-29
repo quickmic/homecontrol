@@ -8,12 +8,14 @@ except:
 import smbus
 import time
 import multiprocessing
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 BMP180 = 0x07
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	if "bmp180id" in Settings:
@@ -109,7 +111,7 @@ class Events(multiprocessing.Process):
 		PressureOld = ""
 		Delay = int(self.Settings["bmp180refreshrate"])
 		IDExternal = self.Settings["bmp180id"] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.addr = 0x77 #Device
 		self.bus = smbus.SMBus(int(self.Settings["bmp180bus"])) # Rev 2 Pi uses 1
 
@@ -121,9 +123,11 @@ class Events(multiprocessing.Process):
 
 			if TemperatureOld != Temperature:
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "temperature", Temperature])
+				self.Settings[SETTINGS_LOGGER].debug("BMP180 Temperature: " + str(Temperature))
 				TemperatureOld = Temperature
 
 			if PressureOld != Pressure:
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "pressure", Pressure])
+				self.Settings[SETTINGS_LOGGER].debug("BMP180 Pressure: " + str(Pressure))
 				PressureOld = Pressure
 

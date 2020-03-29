@@ -13,6 +13,7 @@ import struct
 import ssl
 import json
 import datetime
+import logging
 from PIL import Image, ImageDraw
 import base64
 import io
@@ -39,10 +40,12 @@ MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 ROOMBA_PING = 0x00
 ROOMBA_DISCONNECTED = 0x01
 ROOMBA_CONNECTED = 0x02
+ROOMBA_STATUS_UPDATE = 0x03
 
 def Init(ComQueue, Threads, Settings):
 	for i in range(0, 25):
@@ -96,7 +99,7 @@ class RoombaEvents(multiprocessing.Process):
 		YData = 0
 		MapOffsetX = int(self.Settings["roombamapoffsetx" + self.Index])
 		MapOffsetY = int(self.Settings["roombamapoffsety" + self.Index])
-		PreviousState = {}
+#		PreviousState = {}
 		Mission = False
 		MapImage = Image.new('RGB', (int(self.Settings["roombamapresx" + self.Index]), int(self.Settings["roombamapresy" + self.Index])))
 		MapDraw = ImageDraw.Draw(MapImage)
@@ -152,56 +155,52 @@ class RoombaEvents(multiprocessing.Process):
 
 								dataTemp = {**dataTemp, **dataMod}
 							else:
-								if str(item) in PreviousState:
-									if PreviousState[str(item)] == str(JsonData[item]):
-#										print("Identical: " +   str(item) + " - "  + str(JsonData[item])   )
-										continue
+								ItemData = str(JsonData[item])
+								Temp = str(JsonData[item]).lower()
 
-								PreviousState[str(item)] = str(JsonData[item])
+								if Temp == "true":
+									ItemData = "1"
 
-								if str(JsonData[item]).lower() == "true":
-									JsonData[item] = "1"
+								elif Temp == "false":
+									ItemData = "0"
 
-								if str(JsonData[item]).lower() == "false":
-									JsonData[item] = "0"
+								elif Temp == "on":
+									ItemData = "1"
 
-								if str(JsonData[item]).lower() == "on":
-									JsonData[item] = "1"
-
-								if str(JsonData[item]).lower() == "off":
-									JsonData[item] = "0"
+								elif Temp == "off":
+									ItemData = "0"
 
 								if item == "state/reported/cleanMissionStatus/cycle":
-									if str(JsonData[item]) == "none":
-										self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "start", "0"])
+									if ItemData == "none":
+										self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "start", "0"])
 										Mission = False
 									else:
-										self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "start", "1"])
+										self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "start", "1"])
 										Mission = True
 
 								elif item == "state/reported/cleanMissionStatus/phase":
 									if Mission:
-										if str(JsonData[item]) == "run":
-											self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "pause", "0"])
+										if ItemData == "run":
+											self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "pause", "0"])
 										else:
-											self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "pause", "1"])
+											self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "pause", "1"])
 									else:
-										self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "pause", "-1"])
+										self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "pause", "-1"])
 
 								elif item.find("/sqft") != -1:
 									temp1 = item.replace("/sqft", "/sqm")
-									temp2 = "{:.2f}".format(float(JsonData[item]) * 0.0929)
-									self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + temp1,  temp2])
+									temp2 = "{:.2f}".format(float(ItemData) * 0.0929)
+									self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, temp1,  temp2])
 
-								self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + str(item), str(JsonData[item])])
+								self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, item, ItemData])
 
 								#Map
 								if item == "state/reported/pose/point/x":
-									XData = int(JsonData[item])
+									XData = int(ItemData)
 									DrawMap = True
 
 								if item == "state/reported/pose/point/y":
-									YData = int(JsonData[item])
+									YData = int(ItemData)
 									DrawMap = True
 
 						JsonData = dataTemp
@@ -216,60 +215,39 @@ class RoombaEvents(multiprocessing.Process):
 							MapImage.save(MapData, format='PNG')
 							MapDataHex = MapData.getvalue()
 							MapData = base64.b64encode(MapDataHex).decode()
-							self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "map", MapData])
+							self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "map", MapData])
 						else:
 							MapInit = True
 
 						XOld = X
 						YOld = Y
 				elif High == UNSUBACK: #Unsubscription ack
-					print("Unsubscription ack: " + str(Data))
+					self.Settings[SETTINGS_LOGGER].debug("Roomba Unsubscription ack: " + str(Data))
 					RemainingLenght = self.BytesToInt(Data[1:2])
-#                                       print("RemainingLenght: " + str(RemainingLenght))
 					Data = Data[RemainingLenght + 2:]
-#                                       print("RemainingData: " + str(Data))
-#					continue
 				elif High == SUBACK: #Subscription ack
-					print("Subscription ack: " + str(Data))
+					self.Settings[SETTINGS_LOGGER].debug("Roomba Subscription ack: " + str(Data))
 					RemainingLenght = self.BytesToInt(Data[1:2])
-#                                       print("RemainingLenght: " + str(RemainingLenght))
 					Data = Data[RemainingLenght + 2:]
-#                                       print("RemainingData: " + str(Data))
-#					continue
 				elif High == PUBACK: #Publish ack
-					print("Publish ack: " + str(Data))
+					self.Settings[SETTINGS_LOGGER].debug("Roomba Publish ack: " + str(Data))
 					RemainingLenght = self.BytesToInt(Data[1:2])
-#                                       print("RemainingLenght: " + str(RemainingLenght))
 					Data = Data[RemainingLenght + 2:]
-#                                       print("RemainingData: " + str(Data))
-#					continue
 				elif High == PINGRESP: #Ping recv
-#					print("Ping Received: " + str(Data))
-#					print("Ping Received")
 					RemainingLenght = self.BytesToInt(Data[1:2])
-#                                       print("RemainingLenght: " + str(RemainingLenght))
 					Data = Data[RemainingLenght + 2:]
-#					print("RemainingData: " + str(Data))
-#                                       continue
-
 				elif High == DISCONNECT: #Disconnected
-					print("Disconnected")
+					self.Settings[SETTINGS_LOGGER].debug("Roomba Disconnected")
 					Data = b''
-#                                       print("RemainingData: " + str(Data))
 					self.ComQueue[self.IDInternal].put([ROOMBA_DISCONNECTED])
 					return
-
-#					continue
 				elif High == CONNACK: #Connected
-					print("Connected")
+					self.Settings[SETTINGS_LOGGER].debug("Roomba Connected")
 					RemainingLenght = self.BytesToInt(Data[1:2])
-#					print("RemainingLenght: " + str(RemainingLenght))
 					Data = Data[RemainingLenght + 2:]
-#					print("RemainingData: " + str(Data))
 					self.ComQueue[self.IDInternal].put([ROOMBA_CONNECTED])
-#					continue
 				else:
-					print("OTHER !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" + str(Data))
+					self.Settings[SETTINGS_LOGGER].debug("Roomba OTHER COMMAND: " + str(Data))
 					time.sleep(1)
 class Controller(multiprocessing.Process):
 	def __init__(self, ComQueue, Settings, IDInternal, Index):
@@ -282,16 +260,16 @@ class Controller(multiprocessing.Process):
 	def SubscribeTopics(self, SocketRoomba, Subscriptions):
 		if "#" in Subscriptions:
 			self.RoombaSubscribe(SocketRoomba, "#")
-			print("SUBSCRIBE: ALL" )
+			self.Settings[SETTINGS_LOGGER].debug("Roomba SUBSCRIBE: ALL" )
 		else:
 			for i in range(0, len(Subscriptions)):
-				print("SUBSCRIBE: " + Subscriptions[i])
+				self.Settings[SETTINGS_LOGGER].debug("Roomba SUBSCRIBE: " + Subscriptions[i])
 				self.RoombaSubscribe(SocketRoomba, Subscriptions[i])
 
 	def RoombaConnect(self):
 		try:
 			SocketRoomba2.close()
-			print("Close Done")
+			self.Settings[SETTINGS_LOGGER].debug("Roomba Close Done")
 		except:
 			None
 
@@ -306,9 +284,9 @@ class Controller(multiprocessing.Process):
 				time.sleep(5)
 
 		SocketRoomba.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-		ClientID = (self.Settings["roombausername" + self.Index]).encode('utf-8')
-		Username = (self.Settings["roombausername" + self.Index]).encode('utf-8')
-		Password = (self.Settings["roombapassword" + self.Index]).encode('utf-8')
+		ClientID = self.Settings["roombausername" + self.Index].encode('utf-8')
+		Username = self.Settings["roombausername" + self.Index].encode('utf-8')
+		Password = self.Settings["roombapassword" + self.Index].encode('utf-8')
 		Keepalive = 10
 		protocol = b"MQTT"
 		LenghtRemaining = 2 + len(protocol) + 6 + len(ClientID)
@@ -393,7 +371,7 @@ class Controller(multiprocessing.Process):
 			setproctitle.setproctitle('homecontrol-roomba-control')
 
 		self.IDExternal = self.Settings["roombaid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
 		SocketRoomba = self.RoombaConnect()
 		RoombaKeepaliveThread = RoombaKeepalive(self.ComQueue, self.IDInternal)
@@ -402,42 +380,61 @@ class Controller(multiprocessing.Process):
 		RequestState = ""
 		Init =  False
 		InitStates = {}
+		CurrentState = {}
 		StartTime = time.time()
 
 		while True:
 			IncommingData = self.ComQueue[self.IDInternal].get()
 			Update = False
 
-			if IncommingData[0] == ROOMBA_PING:
-				self.RoombaPing(SocketRoomba)
-
 			if not Init:
 				CurrentTime = time.time()
 
 				if CurrentTime - StartTime > int(self.Settings["waitforstatusupdate"]):
 					Init = True
-				else:
-					continue
 
-			if IncommingData[0] == ROOMBA_CONNECTED:
-				print("Connected")
+			if IncommingData[0] == ROOMBA_PING:
+				self.RoombaPing(SocketRoomba)
+			elif IncommingData[0] == ROOMBA_CONNECTED:
+				self.Settings[SETTINGS_LOGGER].debug("Roomba Connected")
 			elif IncommingData[0] == ROOMBA_DISCONNECTED:
-				print("Disconnected")
+				self.Settings[SETTINGS_LOGGER].debug(" Roomba Disconnected")
 				SocketRoomba = self.RoombaConnect()
+			elif IncommingData[0] == ROOMBA_STATUS_UPDATE:
+				if IncommingData[1] in CurrentState:
+					if CurrentState[IncommingData[1]] != IncommingData[2]:
+						CurrentState[IncommingData[1]] = IncommingData[2]
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[1], IncommingData[2]])
+						self.Settings[SETTINGS_LOGGER].debug("Roomba incomming message: " + str(IncommingData))
+				else:
+					CurrentState[IncommingData[1]] = IncommingData[2]
+					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[1], IncommingData[2]])
+					self.Settings[SETTINGS_LOGGER].debug("Roomba incomming message: " + str(IncommingData))
+			elif IncommingData[0] == "init":
+				self.Settings[SETTINGS_LOGGER].debug("Roomba init")
+
+				for Key, Value in CurrentState.items():
+					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + Key, Value])
 			elif IncommingData[0] == "start":
-				if IncommingData[1] == "0":
-					self.RoombaPublish(SocketRoomba, "cmd", '{"command": "dock", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "0"])
-				else:
-					self.RoombaPublish(SocketRoomba, "cmd", '{"command": "start", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "1"])
+				self.Settings[SETTINGS_LOGGER].debug("Roomba incomming command: " + str(IncommingData))
+
+				if Init:
+					if IncommingData[1] == "0":
+						self.RoombaPublish(SocketRoomba, "cmd", '{"command": "dock", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "0"])
+					else:
+						self.RoombaPublish(SocketRoomba, "cmd", '{"command": "start", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "1"])
 			elif IncommingData[0] == "pause":
-				if IncommingData[1] == "1":
-					self.RoombaPublish(SocketRoomba, "cmd", '{"command": "pause", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "1"])
-				else:
-					self.RoombaPublish(SocketRoomba, "cmd", '{"command": "resume", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "0"])
+				self.Settings[SETTINGS_LOGGER].debug("Roomba incomming command: " + str(IncommingData))
+
+				if Init:
+					if IncommingData[1] == "1":
+						self.RoombaPublish(SocketRoomba, "cmd", '{"command": "pause", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "1"])
+					else:
+						self.RoombaPublish(SocketRoomba, "cmd", '{"command": "resume", "time": ' + self.timestamp() + ', "initiator": "localApp"}', False)
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "0"])
 			elif IncommingData[0] == "state/reported/carpetboost":
 				temp = "carpetBoost"
 				Update = True
@@ -457,7 +454,9 @@ class Controller(multiprocessing.Process):
 				temp = "openOnly"
 				Update = True
 
-			if Update:
+			if Update and Init:
+				self.Settings[SETTINGS_LOGGER].debug("Roomba incomming command: " + str(IncommingData))
+
 				if IncommingData[1] == "1":
 					self.RoombaPublish(SocketRoomba, "delta", '{"state": {"' + temp + '": true}}', False)
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + IncommingData[0], "1"])

@@ -12,6 +12,7 @@ import struct
 import os
 import signal
 import sys
+import logging
 
 #MQTT
 CONNECT = 1
@@ -47,6 +48,7 @@ STATELOG = 0x04
 
 SETTINGS_WORKINGFOLDER = 0x00
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 class Keepalive(multiprocessing.Process):
 	def __init__(self, ComQueue):
@@ -82,19 +84,28 @@ class Events(multiprocessing.Process):
 			setproctitle.setproctitle('homecontrol-mqtt-events')
 
 		Data = b""
-		StartTime = time.time()
+		self.StartTime = time.time()
 		InitStates = {}
 
 		while True:
 			try:
-				Data = Data + self.MQTTSocket.recv(32768) #sequencial read
+				IncommingData = self.MQTTSocket.recv(32768) #sequencial read
 			except: #MQTT Server offline
+				self.ComQueue[MQTT].put([MQTT_DISCONNECTED])
+				Settings[SETTINGS_LOGGER].debug("MQTT Disconnected -> exception")
 				return
+
+			if IncommingData == b'':
+				self.ComQueue[MQTT].put([MQTT_DISCONNECTED])
+				Settings[SETTINGS_LOGGER].debug("MQTT Disconnected -> no data recevied")
+				return
+
+			Data = Data + IncommingData
 
 			if not self.Init:
 				CurrentTime = time.time()
 
-				if CurrentTime - StartTime > int(self.Settings["waitforstatusupdate"]):
+				if CurrentTime - self.StartTime > int(self.Settings["waitforstatusupdate"]):
 					self.Init = True
 
 			while True:
@@ -130,13 +141,8 @@ class Events(multiprocessing.Process):
 					ID = temp[0]
 					action = Topic.replace(ID + "/", "")
 
-					if temp[0] == "global":
-						if temp[1] == "init":
-							if Payload == "1":
-								for i in self.ComQueue:
-									self.ComQueue[i].put([temp[1]])
-
-								self.ComQueue[MQTT].put([MQTT_PUBLISH, "global/init", "0"])
+					if TopicIncomming == "global/command/init":
+						self.ComQueue[MQTT].put(["init", Payload])
 					else:
 						if ID in self.ComQueue:
 							if not self.Init: #While Init also send states
@@ -171,6 +177,7 @@ class Events(multiprocessing.Process):
 					RemainingLenght = self.BytesToInt(Data[1:2])
 					Data = Data[RemainingLenght + 2:]
 				elif High == DISCONNECT: #Disconnected
+					Settings[SETTINGS_LOGGER].debug("MQTT Disconnected1")
 					Data = b""
 					self.ComQueue[MQTT].put([MQTT_DISCONNECTED])
 					return
@@ -179,28 +186,45 @@ class Events(multiprocessing.Process):
 					Data = Data[RemainingLenght + 2:]
 					self.ComQueue[MQTT].put([MQTT_CONNECTED])
 
-class MQTTController(multiprocessing.Process):
+class Controller(multiprocessing.Process):
 	def __init__(self, ComQueue, Settings):
 		multiprocessing.Process.__init__(self)
 		self.ComQueue = ComQueue
 		self.Settings = Settings
 
-	def MQTTConnect(self, Init):
+	def MQTTConnect(self):
+		SubscribeCommands = []
+
 		try:
-			MQTTSocket.close()
+			self.MQTTSocket.close()
 		except:
 			None
 
-		MQTTSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.MQTTSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 		while True:
 			try:
-				MQTTSocket.connect((self.Settings["mqttip"], int(self.Settings["mqttport"])))
+				Settings[SETTINGS_LOGGER].debug("MQTT connecting...")
+				self.MQTTSocket.connect((self.Settings["mqttip"], int(self.Settings["mqttport"])))
 				break
 			except:
 				time.sleep(5)
 
-		MQTTSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+				if not self.Init:
+					self.StartTime = time.time()
+					Settings[SETTINGS_LOGGER].debug("MQTT reset startimer")
+
+
+				#Drop incomming messages while disconnected from MQTT server (clear queue)
+				while not self.ComQueue[MQTT].empty():
+					IncommingData = self.ComQueue[MQTT].get()
+
+					if IncommingData[0] == MQTT_SUBSCRIBE:
+						SubscribeCommands.append(IncommingData)
+
+		self.MQTTSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		self.MQTTSocket.settimeout(15)
+#		self.MQTTSocket.setblocking(0)
 		ClientID = (self.Settings[SETTINGS_IPTOPIC]).encode('utf-8')
 		WillTopic = (self.Settings[SETTINGS_IPTOPIC] + "/online").encode('utf-8')
 		WillPayload = ("0").encode('utf-8')
@@ -247,12 +271,26 @@ class MQTTController(multiprocessing.Process):
 		Packet.extend(Username)
 		Packet.extend(struct.pack("!H", len(Password)))
 		Packet.extend(Password)
-		MQTTSocket.send(Packet)
-		self.EventsThread = Events(self.ComQueue, self.Settings, Init, MQTTSocket)
-		self.EventsThread.start()
-		return MQTTSocket
 
-	def Unsubscribe(self, MQTTSocket, Topic):
+		try:
+
+			self.MQTTSocket.send(Packet)
+			self.EventsThread = Events(self.ComQueue, self.Settings, self.Init, self.MQTTSocket)
+			self.EventsThread.start()
+			Settings[SETTINGS_LOGGER].debug("MQTT connected")
+		except:
+			Settings[SETTINGS_LOGGER].debug("MQTT connected ERROR")
+
+
+		if not self.Init:
+			self.StartTime = time.time()
+			Settings[SETTINGS_LOGGER].debug("MQTT reset startimer2")
+
+		for i in range (0, len(SubscribeCommands)):
+			self.ComQueue[MQTT].put(SubscribeCommands[i])
+			Settings[SETTINGS_LOGGER].debug("MQTT subscribe while connecting: " + str(SubscribeCommands[i]))
+
+	def Unsubscribe(self, Topic):
 		#Unsubscribe
 		Dup = False
 		Topic = Topic.encode('utf-8')
@@ -278,9 +316,13 @@ class MQTTController(multiprocessing.Process):
 		Packet.extend(struct.pack("!H", 1))
 		Packet.extend(struct.pack("!H", len(Topic)))
 		Packet.extend(Topic)
-		MQTTSocket.send(Packet)
 
-	def Publish(self, MQTTSocket, Topic, Payload, Retain):
+		try:
+			self.MQTTSocket.send(Packet)
+		except:
+			self.MQTTConnect()
+
+	def Publish(self, Topic, Payload, Retain):
 		#Publish
 		Dup = False
 		Qos = 0
@@ -309,9 +351,13 @@ class MQTTController(multiprocessing.Process):
 		Packet.extend(struct.pack("!H", len(Topic)))
 		Packet.extend(Topic)
 		Packet.extend(Payload)
-		MQTTSocket.send(Packet)
 
-	def MQTTSubscribe(self, MQTTSocket, Topic):
+		try:
+			self.MQTTSocket.send(Packet)
+		except:
+			Settings[SETTINGS_LOGGER].debug("Publish disconnect")
+
+	def Subscribe(self, Topic):
 		#Subscribe
 		Qos = 0
 		Dup = False
@@ -343,81 +389,115 @@ class MQTTController(multiprocessing.Process):
 		Packet.extend(struct.pack("!H", self.MQTTPacketCounter))
 		Packet.extend(struct.pack("!H", len(Topic)))
 		Packet.extend(Topic)
-		Packet.append(Qos)#
-		MQTTSocket.send(Packet)
+		Packet.append(Qos)
+
+		try:
+			self.MQTTSocket.send(Packet)
+		except:
+			Settings[SETTINGS_LOGGER].debug("MQTT Subscribe disconnect")
 
 	#Modify here
-	def Ping(self, MQTTSocket):
+	def Ping(self):
 		Packet = struct.pack('!BB', 0xC0, 0)
-		MQTTSocket.send(Packet)
+
+		try:
+			self.MQTTSocket.send(Packet)
+		except:
+			Settings[SETTINGS_LOGGER].debug("MQTT Ping disconnect")
 
 	def run(self):
 		if SETPROCTITLE:
 			setproctitle.setproctitle('homecontrol-mqtt-control')
 
-		Init =  False
-		MQTTSocket = self.MQTTConnect(Init)
+		self.Init = False
+		self.MQTTConnect()
 		KeepaliveThread = Keepalive(self.ComQueue)
 		KeepaliveThread.start()
 		self.MQTTPacketCounter = 0
 		Subscriptions = []
 		RequestState = ""
-		StartTime = time.time()
+		self.StartTime = time.time()
 
 		#Default Subscriptions
 		Subscriptions.append("global/#")
+		self.Subscribe("global/#")
 
 		while True:
-			if not Init:
+			if not self.Init:
 				CurrentTime = time.time()
 
-				if CurrentTime - StartTime > int(self.Settings["waitforstatusupdate"]):
-					Init = True
-					self.Publish(MQTTSocket, self.Settings[SETTINGS_IPTOPIC] + "/online", "1", True)
+				if CurrentTime - self.StartTime > int(self.Settings["waitforstatusupdate"]):
+					Settings[SETTINGS_LOGGER].debug("MQTT Init complete")
+					self.Init = True
+					self.Publish(self.Settings[SETTINGS_IPTOPIC] + "/online", "1", True)
 
 			IncommingData = self.ComQueue[MQTT].get()
 
 			if IncommingData[0] == MQTT_PUBLISH:
-				self.Publish(MQTTSocket, IncommingData[1], IncommingData[2], True)
+				self.Publish(IncommingData[1], IncommingData[2], True)
 			elif IncommingData[0] == MQTT_PUBLISH_NORETAIN:
-				self.Publish(MQTTSocket, IncommingData[1], IncommingData[2], False)
+				self.Publish(IncommingData[1], IncommingData[2], False)
 			elif IncommingData[0] == MQTT_REQUEST: #Status request from intercom
 				RequestState = IncommingData[1]
-				self.MQTTSubscribe(MQTTSocket, IncommingData[1])
+				self.Subscribe(IncommingData[1])
 			elif IncommingData[0] == MQTT_REQUEST_RESPONSE:
 				if RequestState == IncommingData[1]:
-					self.Unsubscribe(MQTTSocket, RequestState)
+					self.Unsubscribe(RequestState)
 					self.ComQueue[INTERCOM].put([IncommingData[2]]) #Send Payload to Intercom
 					RequestState = ""
 			elif IncommingData[0] == MQTT_SUBSCRIBE: #Subscribe request from extern, e.g. statelog or eventsexecution
 				if IncommingData[1] == "#":
 					if not "#" in Subscriptions:
 						for Subscription in Subscriptions:
-							self.Unsubscribe(MQTTSocket, Subscription)
+							self.Unsubscribe(Subscription)
 
-						self.MQTTSubscribe(MQTTSocket, IncommingData[1])
-						print("MQTT subscribe1: " + str(   IncommingData[1]   ))
+						self.Subscribe(IncommingData[1])
+						Settings[SETTINGS_LOGGER].debug("MQTT Subscribe 1: " + str(IncommingData[1]))
 						Subscriptions.append(IncommingData[1])
 				else:
 
 					if not IncommingData[1] in Subscriptions:
 						if not "#" in Subscriptions:
-							print("MQTT Subscribe2: " + str(     IncommingData[1]   ))
-							self.MQTTSubscribe(MQTTSocket, IncommingData[1])
+							Settings[SETTINGS_LOGGER].debug("MQTT Subscribe 2: " + str(IncommingData[1]))
+							self.Subscribe(IncommingData[1])
 							Subscriptions.append(IncommingData[1])
 
 			elif IncommingData[0] == MQTT_CONNECTED:
-				self.Publish(MQTTSocket, "global/init", "0", True)
+				self.Publish("global/init", "0", True)
 
-				if Init: #Skip startup-init, but trigger on mqtt-reconnection
-					self.Publish(MQTTSocket, self.Settings[SETTINGS_IPTOPIC] + "/online", "1", True)
+				if self.Init: #Skip startup-init, but trigger on mqtt-reconnection
+					self.Publish(self.Settings[SETTINGS_IPTOPIC] + "/online", "1", True)
 			elif IncommingData[0] == MQTT_DISCONNECTED:
-				MQTTSocket = self.MQTTConnect(Init)
-			elif IncommingData[0] == MQTT_PING:
-				self.Ping(MQTTSocket)
-			else:
-				print("UNKNOWN: " + str(IncommingData))
+				self.MQTTConnect()
 
+				if self.Init:
+					#Resubscribe
+#					Settings[SETTINGS_LOGGER].debug("MQTT resubscribe: " + str(Subscriptions))
+
+					if not "#" in Subscriptions:
+						for Subscription in Subscriptions:
+							Settings[SETTINGS_LOGGER].debug("MQTT resubscribe: " + str(Subscription))
+							self.Subscribe(Subscription)
+					else:
+						self.Subscribe("#")
+						Settings[SETTINGS_LOGGER].debug("MQTT resubscribe: all")
+			elif IncommingData[0] == MQTT_PING:
+				self.Ping()
+			elif IncommingData[0] == "init":
+				if len(IncommingData) > 1:
+					if IncommingData[1] == "1":
+						Settings[SETTINGS_LOGGER].debug("MQTT global init")
+						self.Publish("global/init", "1", True)
+
+						for i in self.ComQueue:
+							self.ComQueue[i].put(["init"])
+
+						time.sleep(1)
+						self.Publish("global/init", "0", True)
+					else:
+						self.Publish("global/init", "0", True)
+			else:
+				Settings[SETTINGS_LOGGER].debug("MQTT UNKNOWN: " + str(IncommingData))
 
 #Terminate Processes
 def receiveSignal(signalNumber, frame):
@@ -458,29 +538,11 @@ Settings = {}
 Settings["eventexecutionenabled"] = "0"
 Settings["intercomenabled"] = "0"
 Settings["waitforstatusupdate"] = "10"
+Settings["logfile"] = "/dev/null"
 Settings[SETTINGS_WORKINGFOLDER] = os.path.dirname(os.path.realpath(__file__))
-
 ComQueue = {}
 ComQueue[MQTT] = multiprocessing.Queue()
-
 Threads = []
-
-#Load Modules
-Modules = {}
-Files = os.listdir(Settings[SETTINGS_WORKINGFOLDER] + "/plugins")
-
-for i in range(0, len(Files)):
-	if Files[i][-3:] == ".py" and Files[i] != "main.py":
-		ModuleName = "plugins." + Files[i].replace(".py", "")
-
-		try: #Skip Modules with unmet dependencies
-			Modules[ModuleName] = __import__(ModuleName, fromlist=['*'])
-		except:
-#			print("Error load modules: " + ModuleName)
-			None
-
-
-
 
 #load config
 if Settings[SETTINGS_WORKINGFOLDER] + '/config.txt':
@@ -499,6 +561,28 @@ if Settings[SETTINGS_WORKINGFOLDER] + '/config.txt':
 
 	Settings[SETTINGS_IPTOPIC] = Settings["ip"].replace(".", "-") #Fix for MQTT-Topics (replace all dots)
 
+	#Logger
+	Settings[SETTINGS_LOGGER] = logging.getLogger('homecontrol')
+	Settings[SETTINGS_LOGGER].setLevel(logging.DEBUG)
+	fh = logging.FileHandler(Settings["logfile"])
+	fh.setLevel(logging.DEBUG)
+	Settings[SETTINGS_LOGGER].addHandler(fh)
+	formatter = logging.Formatter('%(asctime)s - %(message)s')
+	fh.setFormatter(formatter)
+
+	#Load Modules
+	Modules = {}
+	Files = os.listdir(Settings[SETTINGS_WORKINGFOLDER] + "/plugins")
+
+	for i in range(0, len(Files)):
+		if Files[i][-3:] == ".py" and Files[i] != "main.py":
+			ModuleName = "plugins." + Files[i].replace(".py", "")
+
+			try: #Skip Modules with unmet dependencies
+				Modules[ModuleName] = __import__(ModuleName, fromlist=['*'])
+			except:
+				Settings[SETTINGS_LOGGER].debug("Error load modules: " + ModuleName)
+
 	#Start Initscript
 	if "initscript" in Settings:
 		os.system(Settings["initscript"])
@@ -509,20 +593,15 @@ if Settings[SETTINGS_WORKINGFOLDER] + '/config.txt':
 
 	#Init all Modules
 	for Key in Modules:
-		try: #For Debug Only
-#			print("Module loaded: " + str( Modules[Key]  ))
-			ComQueue, Threads = Modules[Key].Init(ComQueue, Threads, Settings)
-		except:
-#			print("Module failed to load " + str(Modules[Key]))
-			None
+		ComQueue, Threads = Modules[Key].Init(ComQueue, Threads, Settings)
 
-	Threads.append(MQTTController(ComQueue, Settings))
+	Threads.append(Controller(ComQueue, Settings))
 	Threads[-1].start()
 
 	#Set firstrun flag to 0 in config.txt
 	if "firstrun" in Settings:
 		if Settings["firstrun"] == "1":
-			print("RESET INIT")
+			Settings[SETTINGS_LOGGER].debug("RESET INIT")
 			Settings["firstrun"] = "0"
 			config = config.replace("firstrun=1", "firstrun=0")
 			f = open(Settings[SETTINGS_WORKINGFOLDER] + '/config.txt', 'w')
@@ -530,7 +609,7 @@ if Settings[SETTINGS_WORKINGFOLDER] + '/config.txt':
 			f.flush()
 			f.close()
 else:
-        print("No config file found")
+        Settings[SETTINGS_LOGGER].debug("No config file found")
 
 
 

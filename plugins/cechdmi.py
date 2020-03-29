@@ -6,12 +6,14 @@ except:
 	SETPROCTITLE = False
 
 import multiprocessing
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	if "cecid" in Settings:
@@ -56,7 +58,10 @@ class Controller(multiprocessing.Process):
 					elif temp == "09:00:01": #Standby, Sony TV specific
 						self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "power", "0"])
 
+			self.Settings[SETTINGS_LOGGER].debug("CEC Incomming Message: " + str(args))
+
 		except Exception as e:
+			self.Settings[SETTINGS_LOGGER].debug("CEC Incomming Message Error")
 			None
 
 	def run(self):
@@ -71,7 +76,7 @@ class Controller(multiprocessing.Process):
 		device = cec.Device(0)
 		opcode = cec.CEC_OPCODE_ACTIVE_SOURCE
 		destination = cec.CECDEVICE_BROADCAST
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 
 		if self.Settings["firstrun"] == "1":
 			self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "source", "0"])
@@ -81,6 +86,7 @@ class Controller(multiprocessing.Process):
 
 		while True:
 			IncommingData = self.ComQueue[self.IDInternal].get()
+			self.Settings[SETTINGS_LOGGER].debug("CEC Incomming Command: " + str(IncommingData))
 
 			if IncommingData[0] == "power":
 				if IncommingData[1] == "1":

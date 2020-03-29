@@ -6,10 +6,12 @@ except:
 	SETPROCTITLE = False
 
 import multiprocessing
+import logging
 
 STATELOG = 0x04
 MQTT = 0x00
 MQTT_SUBSCRIBE = 0x01
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	if "statelogfile" in Settings:
@@ -32,6 +34,7 @@ class Controller(multiprocessing.Process):
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, "#"])
 		Data = ""
 		OldData = ""
+		self.Settings[SETTINGS_LOGGER].debug("Staelogger started")
 
 		while True:
 			IncommingData = self.ComQueue[STATELOG].get()

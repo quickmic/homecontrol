@@ -8,13 +8,12 @@ MQTTIP=x.x.x.x
 MQTTPort=1883
 MQTTUser=username
 MQTTPassword=password
-#mqttclientID=192.168.0.212
 #initscript=/opt/homecontrol/scripts/pre-start.sh
 WaitForStatusUpdate=10
 #startdelay=10
 
 [MQTT Client]
-#This is your own IP address -> this PC
+#local IP address -> this PC
 IP=x.x.x.x
 
 [Neutrino]

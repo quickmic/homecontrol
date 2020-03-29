@@ -10,13 +10,14 @@ import time
 import os
 import subprocess
 import signal
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH_NORETAIN = 0x08
 
 EVENTEXECUTION = 0x02
 SETTINGS_WORKINGFOLDER = 0x00
-
+SETTINGS_LOGGER = 0x02
 MQTT_SUBSCRIBE = 0x01
 EVENTSEXECUTION_TERMINATE_PROCESS = 0x00
 
@@ -30,17 +31,19 @@ def Init(ComQueue, Threads, Settings):
 	return ComQueue, Threads
 
 class Processes(multiprocessing.Process):
-	def __init__(self, Command, ID, CommandsQueue, ComQueue):
+	def __init__(self, Command, ID, CommandsQueue, ComQueue, Settings):
 		multiprocessing.Process.__init__(self)
 		self.Command = Command
 		self.CommandsQueue = CommandsQueue
 		self.ID = ID
 		self.ComQueue = ComQueue
+		self.Settings = Settings
 
 	def run(self):
 		if SETPROCTITLE:
 			setproctitle.setproctitle("homecontrol-eventexecution-" + self.Command)
 
+		self.Settings[SETTINGS_LOGGER].debug("Eventexecution Process start: " + str(self.Command))
 		Process = subprocess.Popen(self.Command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, preexec_fn=os.setpgrp)
 		Poll = None
 
@@ -54,6 +57,7 @@ class Processes(multiprocessing.Process):
 			time.sleep(0.5)
 			Poll = Process.poll()
 
+		self.Settings[SETTINGS_LOGGER].debug("Eventexecution Process stopped: " + str(self.Command))
 		self.ComQueue[EVENTEXECUTION].put([EVENTSEXECUTION_TERMINATE_PROCESS, self.ID])
 
 class Controller(multiprocessing.Process):
@@ -132,6 +136,7 @@ class Controller(multiprocessing.Process):
 
 		while True:
 			DataIncomming = self.ComQueue[EVENTEXECUTION].get()
+#			self.Settings[SETTINGS_LOGGER].debug("Eventexecution Incomming Command: " + str(DataIncomming))
 
 			if DataIncomming[0] == EVENTSEXECUTION_TERMINATE_PROCESS:
 				ProcessThread[DataIncomming[1]].join()
@@ -178,7 +183,7 @@ class Controller(multiprocessing.Process):
 
 												#Start process
 												CommandsQueue[EventID] = multiprocessing.Queue()
-												ProcessThread[EventID] = Processes(EventData[EventID][j], EventID, CommandsQueue, self.ComQueue)
+												ProcessThread[EventID] = Processes(EventData[EventID][j], EventID, CommandsQueue, self.ComQueue, self.Settings)
 												ProcessThread[EventID].start()
 												ProcessRunning[EventID] = True
 

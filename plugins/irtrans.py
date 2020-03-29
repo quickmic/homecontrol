@@ -8,12 +8,14 @@ except:
 import multiprocessing
 import time
 import socket
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 IRTRANS_CONNECT = 0x00
 IRTRANS_SLIDERUPDATE = 0x01
@@ -96,7 +98,7 @@ class Controller(multiprocessing.Process):
 		self.socketIRTransCommand = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 		while Connected == False:
-			print("IRTrans Commandsocket connecting...")
+			self.Settings[SETTINGS_LOGGER].debug("IRTrans Commandsocket connecting...")
 
 			try:
 				self.socketIRTransCommand.connect((self.Settings["irtransip" + self.Index], int(self.Settings["irtransport" + self.Index])))
@@ -107,7 +109,7 @@ class Controller(multiprocessing.Process):
 			time.sleep(5)
 			Connected = True
 			self.socketIRTransCommand.send(("ASCI").encode())
-			print("IRTrans Commandsocket connected")
+			self.Settings[SETTINGS_LOGGER].debug("IRTrans Commandsocket connected")
 			time.sleep(2)
 
 	def run(self):
@@ -115,7 +117,7 @@ class Controller(multiprocessing.Process):
 			setproctitle.setproctitle('homecontrol-irtrans-commands-' + self.Index)
 
 		self.IDExternal = self.Settings["irtransid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
 		ThreadEvents = Events(self.ComQueue, self.Settings, self.IDInternal, self.Index)
 		ThreadEvents.start()
@@ -153,6 +155,7 @@ class Controller(multiprocessing.Process):
 
 		while True:
 			Data = self.ComQueue[self.IDInternal].get()
+			self.Settings[SETTINGS_LOGGER].debug("IRTrans incomming command: " + str(Data))
 
 			if Data[0] == IRTRANS_CONNECT:
 				self.connect()
@@ -321,7 +324,7 @@ class Events(multiprocessing.Process):
 		self.socketEvents.settimeout(15)
 
 		while Connected == False:
-			print("IRTrans Eventsocket connecting...")
+			self.Settings[SETTINGS_LOGGER].debug("IRTrans Eventsocket connecting...")
 
 			try:
 				self.socketEvents.connect((self.Settings["irtransip" + self.Index], int(self.Settings["irtransport" + self.Index])))
@@ -332,7 +335,7 @@ class Events(multiprocessing.Process):
 			time.sleep(5)
 			Connected = True
 			self.socketEvents.send(("ASCR").encode())
-			print("IRTrans Eventsocket connected")
+			self.Settings[SETTINGS_LOGGER].debug("IRTrans Eventsocket connected")
 			time.sleep(2)
 			self.ComQueue[MQTT].put([MQTT_PUBLISH, self.Settings["irtransip" + self.Index].replace(".", "-") + "/online", "1"])
 
@@ -348,6 +351,7 @@ class Events(multiprocessing.Process):
 		while True:
 			try:
 				Data = self.socketEvents.recv(512)
+				self.Settings[SETTINGS_LOGGER].debug("IRTrans incomming message: " + str(Data))
 
 				if not Data:
 					Data = ""
@@ -361,6 +365,7 @@ class Events(multiprocessing.Process):
 				self.ComQueue[self.IDInternal].put([IRTRANS_INCOMMINGDATA, Ret])
 			except socket.timeout:
 				if Data == "detecttimeout":
+					self.Settings[SETTINGS_LOGGER].debug("IRTrans timeout")
 					Data = ""
 					self.connect()
 					continue

@@ -8,26 +8,27 @@ except:
 import multiprocessing
 import socket
 import time
+import logging
 
 MQTT = 0x00
 INTERCOM = 0x03
-
-#Communication
 MQTT_REQUEST = 0x07
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	if "intercomenabled" in Settings:
 		if Settings["intercomenabled"] == "1":
 			ComQueue[INTERCOM] = multiprocessing.Queue()
-			Threads.append(Controller(ComQueue))
+			Threads.append(Controller(ComQueue, Settings))
 			Threads[-1].start()
 
 	return ComQueue, Threads
 
 class Controller(multiprocessing.Process):
-	def __init__(self, ComQueue):
+	def __init__(self, ComQueue, Settings):
 		multiprocessing.Process.__init__(self)
 		self.ComQueue = ComQueue
+		self.Settings = Settings
 
 	def run(self):
 		if SETPROCTITLE:
@@ -43,6 +44,7 @@ class Controller(multiprocessing.Process):
 			socketClient, addr = socketListening.accept()
 			serialBuffer = socketClient.recv(256).decode(encoding='ascii') #waiting here for input
 			temp = serialBuffer.replace("\n", "")
+			self.Settings[SETTINGS_LOGGER].debug("Intercom incomming query: " + temp)
 			self.ComQueue[MQTT].put([MQTT_REQUEST, temp])
 
 			#Waiting for answer loop

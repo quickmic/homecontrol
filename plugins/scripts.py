@@ -10,12 +10,14 @@ import os
 import subprocess
 import signal
 import time
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 SCRIPTS_TERMINATE_PROCESS = 0x00
 
@@ -71,7 +73,7 @@ class Controller(multiprocessing.Process):
 
 		levelprevious = -1
 		IDExternal = self.Settings["scriptid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, IDExternal + "#"])
 		InitCommands = []
 		SliderLevelLast = "0"
@@ -113,6 +115,7 @@ class Controller(multiprocessing.Process):
 
 		while True:
 			data = self.ComQueue[self.IDInternal].get()
+			self.Settings[SETTINGS_LOGGER].debug("Scripts incomming command: " + str(data))
 
 			if data[0] == SCRIPTS_TERMINATE_PROCESS:
 				ProcessThread[data[1]].join()
@@ -189,20 +192,10 @@ class Controller(multiprocessing.Process):
 
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "LEVEL", data[1]])
 			elif data[0] == "init":
-				if Process[0] != 0:
-					os.killpg(os.getpgid(Process[0].pid), signal.SIGTERM)
-					Process[0] = 0
-
-				if Process[1] != 0:
-					os.killpg(os.getpgid(Process[1].pid), signal.SIGTERM)
-					Process[1] = 0
-
 				if l == 1: # only one level, must be a "state" script
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "STATE", "0"])
+					self.ComQueue[self.IDInternal].put(["state", "0"])
 				else: #more then one level, must be a multilevel script
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "LEVEL", "0"])
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "LEVELLAST", "0"])
-					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "LEVELLASTTOGGLE", "0"])
+					self.ComQueue[self.IDInternal].put(["level", "0"])
 
 				continue
 			elif data[0] == "levellasttoggle":

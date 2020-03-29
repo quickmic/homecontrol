@@ -10,12 +10,14 @@ import datetime
 import calendar
 import multiprocessing
 import time
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	if "astroid" in Settings:
@@ -38,7 +40,7 @@ class Controller(multiprocessing.Process):
 			setproctitle.setproctitle('Homecontrol-Astro-Events')
 
 		self.IDExternal = self.Settings["astroid"] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
 		self.EventsThread = Events(self.ComQueue, self.Settings, self.IDExternal)
 		self.EventsThread.start()
@@ -54,6 +56,17 @@ class Controller(multiprocessing.Process):
 			if len(IncommingData) > 1:
 				if IncommingData[0] == "night": #Toggle Night mode
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "Night", IncommingData[1]])
+					self.Settings[SETTINGS_LOGGER].debug("Astro: toggle night mode")
+
+			else:
+				if IncommingData[0] == "init":
+					self.Settings[SETTINGS_LOGGER].debug("Astro: init")
+					self.EventsThread.terminate()
+					self.EventsThread.join()
+					self.EventsThread.close()
+					time.sleep(5)
+					self.EventsThread = Events(self.ComQueue, self.Settings, self.IDExternal)
+					self.EventsThread.start()
 
 class Events(multiprocessing.Process):
 	def __init__(self, ComQueue, Settings, IDExternal):
@@ -76,20 +89,15 @@ class Events(multiprocessing.Process):
 		NightOld = ""
 
 		while True:
-
 			Zone = self.setzone()
 			heute = datetime.datetime.now()
 			T = float(heute.strftime('%j'))
-
 			Sunraise = self.SunRaise(T, h)
 			Sunset  = self.SunSet(T, h)
-
 			Sunraise = Sunraise - self.Longitude / 15.0 + Zone
 			Sunset = Sunset - self.Longitude / 15.0 + Zone
-
 			min,std = math.modf(Sunraise)
 			min = min * 60
-
 			SunraiseH = int(std)
 			SunraiseM = int(min)
 			SunraiseTime = datetime.time(SunraiseH, SunraiseM, 0)
@@ -97,6 +105,7 @@ class Events(multiprocessing.Process):
 			if SunraiseTime != SunraiseTimeOld:
 				SunraiseTimeOld = SunraiseTime
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "Sunraise", str(SunraiseTime)])
+				self.Settings[SETTINGS_LOGGER].debug("Astro set sunraise: " + str(SunraiseTime))
 
 			min,std = math.modf(Sunset)
 			min = min * 60
@@ -107,12 +116,14 @@ class Events(multiprocessing.Process):
 			if SunsetTime != SunsetTimeOld:
 				SunsetTimeOld = SunsetTime
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "Sunset", str(SunsetTime)])
+				self.Settings[SETTINGS_LOGGER].debug("Astro set sunset: " + str(SunsetTime))
 
 			Night = self.CheckNight(datetime.datetime.now().time(), SunsetTime, SunraiseTime)
 
 			if Night != NightOld:
 				NightOld = Night
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "Night", Night])
+				self.Settings[SETTINGS_LOGGER].debug("Astro set night: " + str(Night))
 
 			time.sleep(60)
 
@@ -128,7 +139,6 @@ class Events(multiprocessing.Process):
 				return "1"
 			else:
 				return "0"
-
 
 	def setzone(self):
 		year  = datetime.date.today().year
@@ -163,5 +173,3 @@ class Events(multiprocessing.Process):
 	def SunSet(self, T, h):
 		DK = self.Declination(T)
 		return (12 + self.TimeShift(DK, h) - self.TimeEquation(T));
-
-

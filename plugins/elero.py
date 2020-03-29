@@ -9,6 +9,7 @@ import multiprocessing
 import time
 import termios
 import os
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
@@ -16,6 +17,7 @@ MQTT_SUBSCRIBE = 0x01
 ELEROIO = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 #Elero
 ELERO_NOINFO = 0x00
@@ -247,17 +249,15 @@ class Controller(multiprocessing.Process):
 			else:
 				CommandPosition = ((Position - (((1 - ThresholdProgressStart) - ThresholdProgressEnd) * FactorMiddle + (ThresholdProgressEnd * FactorEnd))) / FactorStart) + (1 - ThresholdProgressStart)
 
-			#Fix Rounting issues
+			#Fix Rounding issues
 			if ProgressPosition > 1:
 				ProgressPosition = 1.0
-
-			if ProgressPosition < 0:
+			elif ProgressPosition < 0:
 				ProgressPosition = 0.0
 
 			if CommandPosition > 1:
 				CommandPosition = 1.0
-
-			if CommandPosition < 0:
+			elif CommandPosition < 0:
 				CommandPosition = 0.0
 
 			#Save Positions
@@ -270,7 +270,8 @@ class Controller(multiprocessing.Process):
 
 		ChannelID = int(self.Settings["elerochannel" + self.Index])
 		IDExternal = self.Settings["eleroid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, IDExternal + "#"])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.Duration = {}
 		self.MovingStartTime = {}
 		self.Duration[ELERO_MOVING_UP] = float(self.Settings["elerodurationup" + self.Index])
@@ -298,18 +299,17 @@ class Controller(multiprocessing.Process):
 		time.sleep(self.Duration[ELERO_MOVING_UP])
 
 		#Restore previous State
-		RestorePosition = ""
-
-		TerminateCommand = ""
+#		RestorePosition = ""
 
 		while not self.ComQueue[self.IDInternal].empty():
-			temp = self.ComQueue[self.IDInternal].get()
+#			temp = self.ComQueue[self.IDInternal].get()
+			self.ComQueue[self.IDInternal].get()
 
-			if temp[0] == "position":
-				RestorePosition = temp
+#			if temp[0] == "position":
+#				RestorePosition = temp
 
-		if RestorePosition != "":
-			self.ComQueue[self.IDInternal].put(RestorePosition)
+#		if RestorePosition != "":
+#			self.ComQueue[self.IDInternal].put(RestorePosition)
 
 		self.ComQueue[self.IDInternal].put([ELERO_STATUS, ELERO_REFRESH])
 
@@ -317,7 +317,10 @@ class Controller(multiprocessing.Process):
 			#Incomming Commands or Status
 			IncommingData = self.ComQueue[self.IDInternal].get()
 
-			if IncommingData[0] == "position":
+			if IncommingData[0] == "init":
+				PositionSubjectiveOld = -1
+				self.ComQueue[ELEROIO].put([ELERO_MOVING_UP, str(ChannelID)])
+			elif IncommingData[0] == "position":
 				IncommingData[1] = round(float(IncommingData[1]), 4)
 
 				if IncommingData[1] > 1.0:
@@ -433,12 +436,15 @@ class Controller(multiprocessing.Process):
 				self.MovingStartTime[ELERO_MOVING_UP] = 0.0
 				self.MovingStartTime[ELERO_MOVING_DOWN] = 0.0
 				self.PositionStop = 1.0
+				self.Settings[SETTINGS_LOGGER].debug("Elero stop Position: ELERO_TOP_POSITION_STOP or Status == ELERO_TOP_POSITION_STOP_WHICH_IS_TILT_POSITION")
 			elif Status == ELERO_BOTTOM_POSITION_STOP or Status == ELERO_BOTTOM_POSITION_STOP_WHICH_IS_INTERMEDIATE_POSITION:
 				self.Position = 0.0
 				self.MovingStartTime[ELERO_MOVING_UP] = 0.0
 				self.MovingStartTime[ELERO_MOVING_DOWN] = 0.0
 				self.PositionStop = 0.0
+				self.Settings[SETTINGS_LOGGER].debug("Elero stop Position: ELERO_BOTTOM_POSITION_STOP_WHICH_IS_INTERMEDIATE_POSITION")
 			elif Status == ELERO_STOPPED_IN_UNDEFINED_POSITION or Status == ELERO_INTERMEDIATE_POSITION_STOP or Status == ELERO_TILT_VENTILATION_POSITION_STOP:
+				self.Settings[SETTINGS_LOGGER].debug("Elero stop Position: ELERO_STOPPED_IN_UNDEFINED_POSITION or Status == ELERO_INTERMEDIATE_POSITION_STOP or Status == ELERO_TILT_VENTILATION_POSITION_STOP")
 				self.StopElero()
 
 			#Update Slider
@@ -447,6 +453,7 @@ class Controller(multiprocessing.Process):
 			if PositionSubjectiveOld != PositionSubjective:
 				PositionSubjectiveOld = PositionSubjective
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "position", str(PositionSubjective)])
+				self.Settings[SETTINGS_LOGGER].debug("Elero subjective Position: " + str(PositionSubjective))
 
 	def StopElero(self):
 		if self.MovingStartTime[ELERO_MOVING_UP] != 0.0: #Moving up stop

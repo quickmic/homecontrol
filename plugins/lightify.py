@@ -12,13 +12,14 @@ import socket
 import binascii
 import random
 import sys
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
-
+SETTINGS_LOGGER = 0x02
 LIGHTIFY_REFRESH = 0x00
 
 def Init(ComQueue, Threads, Settings):
@@ -55,6 +56,8 @@ class Controller(multiprocessing.Process):
 		self.Index = Index
 
 	def Connect(self):
+		self.Settings[SETTINGS_LOGGER].debug("Lightify connecting...")
+
 		for i in range(0, len(self.lightifyDevicesState)):
 			self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + self.lightifyDevicesName[i] + "/state", "undefined"])
 
@@ -74,6 +77,7 @@ class Controller(multiprocessing.Process):
 				Connected = True
 			except:
 				time.sleep(5)
+				self.Settings[SETTINGS_LOGGER].debug("Lightify connection error")
 
 		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.Settings["lightifyip" + self.Index].replace(".", "-") + "/online", "1"])
 		self.socketLightify.send(bytes.fromhex("0B000013000000000100000000")) #get devices
@@ -82,6 +86,8 @@ class Controller(multiprocessing.Process):
 		recvData = recvData[6:]
 		offset = 0
 		i = 0
+
+		self.Settings[SETTINGS_LOGGER].debug("Lightify connected")
 
 		#Detect devices and save ID and Name
 		while offset + 100 < len(recvData):
@@ -117,6 +123,7 @@ class Controller(multiprocessing.Process):
 			if state != self.lightifyDevicesState[i]:
 				self.lightifyDevicesState[i] = state
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + self.lightifyDevicesName[i] + "/state", state])
+				self.Settings[SETTINGS_LOGGER].debug("Lightify state: " + self.lightifyDevicesName[i] + "/state/" + str(state))
 
 	def run(self):
 		if SETPROCTITLE:
@@ -124,7 +131,7 @@ class Controller(multiprocessing.Process):
 
 #		RefreshTime = float(self.Settings["lightifyupdateinterval" + self.Index])
 		self.IDExternal = self.Settings["lightifyid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
 
 
@@ -145,7 +152,13 @@ class Controller(multiprocessing.Process):
 
 			if IncommingData[0] == LIGHTIFY_REFRESH: #Restart Status Refresh Timer
 				self.Status()
+			elif IncommingData[0] == "init":
+				self.Settings[SETTINGS_LOGGER].debug("Lightify init")
+
+				for i in range(0, len(self.lightifyDevicesState)):
+					self.lightifyDevicesState[i] = -1
 			else: #send command
+				self.Settings[SETTINGS_LOGGER].debug("Lightify incomming command: " + str(IncommingData))
 				Temp = IncommingData[0].split("/")
 
 				if len(IncommingData) > 1: #skip e.g. 'init'
@@ -165,6 +178,7 @@ class Controller(multiprocessing.Process):
 										self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + self.lightifyDevicesName[i] + "/state", IncommingData[1]])
 									else:
 										self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + self.lightifyDevicesName[i] + "/state", "undefined"])
+										self.lightifyDevicesState[i] = "undefined"
 								except:
 									self.Connect()
 

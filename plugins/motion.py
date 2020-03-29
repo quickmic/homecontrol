@@ -9,12 +9,14 @@ import multiprocessing
 import time
 import urllib.request
 import socket
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	for i in range(0, 5):
@@ -48,6 +50,7 @@ class Events(multiprocessing.Process):
 		while True:
 			sockClient, addr = socketListening.accept()
 			serialBuffer = sockClient.recv(8).decode(encoding='ascii') #waiting here for input
+			self.Settings[SETTINGS_LOGGER].debug("Motion incomming message: " + str(serialBuffer))
 			temp = serialBuffer.split("_")
 			SendMQTT = self.IDExternal + temp[0] #StandardID + Index
 
@@ -108,38 +111,15 @@ class Controller(multiprocessing.Process):
 		self.IDInternal = IDInternal
 		self.Index = Index
 
-	def run(self):
-		if SETPROCTITLE:
-			setproctitle.setproctitle('homecontrol-motion-' + self.Index)
-
-		time.sleep(int(self.Index)) #staggered Initialization
-		self.URL = "http://" + self.Settings["motionip" + self.Index] + ":" + self.Settings["motionport" + self.Index] + "/"
-		self.IDExternal = self.Settings["motionid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
-		myIP = self.Settings["ip"]
-		IDExternal = self.Settings["motionid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
-		EventsThread = Events(self.ComQueue, self.Settings, self.Index, IDExternal)
-		EventsThread.start()
-		time.sleep(int(self.Settings["waitforstatusupdate"]))
-		CameraID = list()
-
-		#http Authentification
-		password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-		top_level_url = "http://" + myIP + "/"
-		password_mgr.add_password(None, top_level_url, "quickmic", "password")
-		handler = urllib.request.HTTPBasicAuthHandler(password_mgr)
-		opener = urllib.request.build_opener(handler)
-		urllib.request.install_opener(opener)
-
+	def ReadState(self):
 		#Get number of cameras
 		Data = ""
 
 		while Data == "": #Check if motion is running
 			try:
-				Data = urllib.request.urlopen(self.URL + '0/detection/status').read().decode(encoding='utf-8')
+				Data = self.URLLib.urlopen(self.URL + '0/detection/status').read().decode(encoding='utf-8')
 			except:
-				print("Motion not running")
+				self.Settings[SETTINGS_LOGGER].debug("Motion not running")
 				time.sleep(5)
 
 		Data = Data.lower()
@@ -150,11 +130,11 @@ class Controller(multiprocessing.Process):
 			temp[i] = temp[i].replace("camera", "").strip()
 			pos = temp[i].find(" ")
 			temp[i] = temp[i][:pos]
-			CameraID.append(temp[i])
+			self.CameraID.append(temp[i])
 
 			#Read Detection status:
 			time.sleep(0.1)
-			Data = urllib.request.urlopen(self.URL + str(i) + '/detection/status').read().decode(encoding='utf-8')
+			Data = self.URLLib.urlopen(self.URL + str(i) + '/detection/status').read().decode(encoding='utf-8')
 
 			if Data.lower().find("active") != -1:
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + str(i) + "/DETECTION", "1"])
@@ -163,7 +143,7 @@ class Controller(multiprocessing.Process):
 
 			#Query Connection status:
 			time.sleep(0.1)
-			Data = urllib.request.urlopen(self.URL + str(i) + '/detection/connection').read().decode(encoding='utf-8')
+			Data = self.URLLib.urlopen(self.URL + str(i) + '/detection/connection').read().decode(encoding='utf-8')
 
 			if Data.lower().find("ok") != -1:
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + str(i) + "/CONNECTION", "1"])
@@ -172,26 +152,53 @@ class Controller(multiprocessing.Process):
 
 			#Configure Motion settings for callbacks
 			time.sleep(0.1)
-			urllib.request.urlopen(self.URL + CameraID[i] + '/config/set?on_event_start=/bin/echo%20-n%20' + str(i) + '_e1|/bin/netcat%20' + myIP + '%2050000%20-q%200').read()
+			self.URLLib.urlopen(self.URL + self.CameraID[i] + '/config/set?on_event_start=/bin/echo%20-n%20' + str(i) + '_e1|/bin/netcat%20' + self.myIP + '%2050000%20-q%200').read()
 			time.sleep(0.1)
-			urllib.request.urlopen(self.URL + CameraID[i] + '/config/set?on_event_end=/bin/echo%20-n%20' + str(i) + '_e0|/bin/netcat%20' + myIP + '%2050000%20-q%200').read()
+			self.URLLib.urlopen(self.URL + self.CameraID[i] + '/config/set?on_event_end=/bin/echo%20-n%20' + str(i) + '_e0|/bin/netcat%20' + self.myIP + '%2050000%20-q%200').read()
 			time.sleep(0.1)
-			urllib.request.urlopen(self.URL + CameraID[i] + '/config/set?on_movie_start=/bin/echo%20-n%20' + str(i) + '_m1|/bin/netcat%20' + myIP + '%2050000%20-q%200').read()
+			self.URLLib.urlopen(self.URL + self.CameraID[i] + '/config/set?on_movie_start=/bin/echo%20-n%20' + str(i) + '_m1|/bin/netcat%20' + self.myIP + '%2050000%20-q%200').read()
 			time.sleep(0.1)
-			urllib.request.urlopen(self.URL + CameraID[i] + '/config/set?on_movie_end=/bin/echo%20-n%20' + str(i) + '_m0|/bin/netcat%20' + myIP + '%2050000%20-q%200').read()
+			self.URLLib.urlopen(self.URL + self.CameraID[i] + '/config/set?on_movie_end=/bin/echo%20-n%20' + str(i) + '_m0|/bin/netcat%20' + self.myIP + '%2050000%20-q%200').read()
 			time.sleep(0.1)
-			urllib.request.urlopen(self.URL + CameraID[i] + '/config/set?on_camera_lost=/bin/echo%20-n%20' + str(i) + '_c0|/bin/netcat%20' + myIP + '%2050000%20-q%200').read()
+			self.URLLib.urlopen(self.URL + self.CameraID[i] + '/config/set?on_camera_lost=/bin/echo%20-n%20' + str(i) + '_c0|/bin/netcat%20' + self.myIP + '%2050000%20-q%200').read()
 			time.sleep(0.1)
-			urllib.request.urlopen(self.URL + CameraID[i] + '/config/set?on_camera_found=/bin/echo%20-n%20' + str(i) + '_c1|/bin/netcat%20' + myIP + '%2050000%20-q%200').read()
+			self.URLLib.urlopen(self.URL + self.CameraID[i] + '/config/set?on_camera_found=/bin/echo%20-n%20' + str(i) + '_c1|/bin/netcat%20' + self.myIP + '%2050000%20-q%200').read()
 			time.sleep(0.1)
-#			urllib.request.urlopen(self.URL + CameraID[i] + "/config/write").read()
-
+#			self.URLLib.urlopen(self.URL + self.CameraID[i] + "/config/write").read()
 	                #Reset Events and pictures
 			self.ComQueue[self.IDInternal].put([str(i) + "/event", "0"])
 			self.ComQueue[self.IDInternal].put([str(i) + "/picture", "0"])
 
+	def run(self):
+		if SETPROCTITLE:
+			setproctitle.setproctitle('homecontrol-motion-' + self.Index)
+
+		time.sleep(int(self.Index)) #staggered Initialization
+		self.URL = "http://" + self.Settings["motionip" + self.Index] + ":" + self.Settings["motionport" + self.Index] + "/"
+		self.IDExternal = self.Settings["motionid" + self.Index] + "/"
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, self.IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.myIP = self.Settings["ip"]
+		IDExternal = self.Settings["motionid" + self.Index] + "/"
+		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, self.IDExternal + "#"])
+		EventsThread = Events(self.ComQueue, self.Settings, self.Index, IDExternal)
+		EventsThread.start()
+		time.sleep(int(self.Settings["waitforstatusupdate"]))
+		self.CameraID = list()
+
+		#http Authentification
+		password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+		top_level_url = "http://" + self.myIP + "/"
+		password_mgr.add_password(None, top_level_url, "quickmic", "password")
+		handler = urllib.request.HTTPBasicAuthHandler(password_mgr)
+		opener = urllib.request.build_opener(handler)
+		urllib.request.install_opener(opener)
+		self.URLLib = urllib.request
+
+		self.ReadState()
+
 		while True:
 			DataIncomming = self.ComQueue[self.IDInternal].get()
+			self.Settings[SETTINGS_LOGGER].debug("Motion incomming command: " + str(DataIncomming))
 			Temp = DataIncomming[0].split("/")
 
 			if len(Temp) >= 2:
@@ -199,24 +206,30 @@ class Controller(multiprocessing.Process):
 
 				if Temp[1] == "detection":
 					if DataIncomming[1] == "1":
-						urllib.request.urlopen(self.URL + CameraID[int(Temp[0])] + "/detection/start")
+						self.URLLib.urlopen(self.URL + self.CameraID[int(Temp[0])] + "/detection/start")
 					else:
-						urllib.request.urlopen(self.URL + CameraID[int(Temp[0])] + "/detection/pause")
+						self.URLLib.urlopen(self.URL + self.CameraID[int(Temp[0])] + "/detection/pause")
+						self.URLLib.urlopen(self.URL + self.CameraID[int(Temp[0])] + "/action/eventend")
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, SendMQTT + "/EVENT", "0"])
 
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, SendMQTT + "/DETECTION", DataIncomming[1]])
 				elif Temp[1] == "event":
 					if DataIncomming[1] == "1":
-						urllib.request.urlopen(self.URL + CameraID[int(Temp[0])] + "/action/eventstart")
+						self.URLLib.urlopen(self.URL + self.CameraID[int(Temp[0])] + "/action/eventstart")
 					else:
-						urllib.request.urlopen(self.URL + CameraID[int(Temp[0])] + "/action/eventend")
+						self.URLLib.urlopen(self.URL + self.CameraID[int(Temp[0])] + "/action/eventend")
 
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, SendMQTT + "/EVENT", DataIncomming[1]])
 				elif Temp[1] == "picture":
 					if DataIncomming[1] == "1":
 						self.ComQueue[MQTT].put([MQTT_PUBLISH, SendMQTT + "/PICTURE", "1"])
-						urllib.request.urlopen(self.URL + CameraID[int(Temp[0])] + '/action/snapshot')
+						self.URLLib.urlopen(self.URL + self.CameraID[int(Temp[0])] + '/action/snapshot')
 						time.sleep(0.25)
 
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, SendMQTT + "/PICTURE", "0"])
 
 				time.sleep(0.1)
+			else:
+				if Temp[0] == "init":
+					self.Settings[SETTINGS_LOGGER].debug("Motion init")
+					self.ReadState()

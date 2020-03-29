@@ -7,12 +7,14 @@ except:
 
 import multiprocessing
 import pigpio
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_SUBSCRIBE = 0x01
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 LEDRGB_RED = 0x00
 LEDRGB_GREEN = 0x01
@@ -63,7 +65,7 @@ class Controller(multiprocessing.Process):
 		ID[LEDRGB_GREEN] = float(self.Settings["ledrgbgpiogreen" + self.Index])
 		ID[LEDRGB_BLUE] = float(self.Settings["ledrgbgpioblue" + self.Index])
 		IDExternal = self.Settings["ledrgbid" + self.Index] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		self.ComQueue[MQTT].put([MQTT_SUBSCRIBE, IDExternal + "#"])
 
 		if self.Settings["firstrun"] == "1":
@@ -71,6 +73,10 @@ class Controller(multiprocessing.Process):
 
 		while True:
 			Data = self.ComQueue[self.IDInternal].get()
+			self.Settings[SETTINGS_LOGGER].debug("LedRGB incomming command: " + str(Data))
+
+			if Data[0] == "interface":
+				continue
 
 			if len(Data) > 1: #skip e.g. 'init'
 				if Data[1] == "undefined" or Data[1] == "nan":
@@ -208,15 +214,15 @@ class Controller(multiprocessing.Process):
 
 					#Precaution
 					if int(Value[LEDRGB_RED]) > 255:
-						print("test: " + str(Value[LEDRGB_RED]))
+						self.Settings[SETTINGS_LOGGER].debug("ledRGB: " + str(Value[LEDRGB_RED]))
 						Value[LEDRGB_RED] = 255
 
 					if int(Value[LEDRGB_GREEN]) > 255:
-						print("test: " + str(Value[LEDRGB_GREEN]))
+						self.Settings[SETTINGS_LOGGER].debug("LedRGB: " + str(Value[LEDRGB_GREEN]))
 						Value[LEDRGB_GREEN] = 255
 
 					if int(Value[LEDRGB_BLUE]) > 255:
-						print("test: " + str(Value[LEDRGB_BLUE]))
+						self.Settings[SETTINGS_LOGGER].debug("LedRGB: " + str(Value[LEDRGB_BLUE]))
 						Value[LEDRGB_BLUE] = 255
 
 
@@ -238,6 +244,7 @@ class Controller(multiprocessing.Process):
 						pi.set_PWM_dutycycle(int(ID[LEDRGB_BLUE]), int(Value[LEDRGB_BLUE]))
 
 			elif Data[0] == "init":
+				self.Settings[SETTINGS_LOGGER].debug("LedRGB init")
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "red", "0"])
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "green", "0"])
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "blue", "0"])

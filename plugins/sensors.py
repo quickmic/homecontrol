@@ -8,11 +8,13 @@ except:
 import time
 import multiprocessing
 import os
+import logging
 
 MQTT = 0x00
 MQTT_PUBLISH = 0x06
 MQTT_PUBLISH_NORETAIN = 0x08
 SETTINGS_IPTOPIC = 0x01
+SETTINGS_LOGGER = 0x02
 
 def Init(ComQueue, Threads, Settings):
 	if "sensorsid" in Settings:
@@ -31,9 +33,10 @@ class Controller(multiprocessing.Process):
 		if SETPROCTITLE:
 			setproctitle.setproctitle('homecontrol-sensors')
 
+		self.Settings[SETTINGS_LOGGER].debug("Sensors started")
 		Delay = int(self.Settings["sensorsrefreshrate"])
 		IDExternal = self.Settings["sensorsid"] + "/"
-		self.ComQueue[MQTT].put([MQTT_PUBLISH_NORETAIN, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
 		Label = []
 		InputFile = []
 		PrevData = []
@@ -51,8 +54,9 @@ class Controller(multiprocessing.Process):
 						data = data.replace("\n", "").strip()
 						data = data.replace("+", "")
 						Label.append(data)
-						InputFile.append( Temp.replace("label", "input"))
+						InputFile.append(Temp.replace("label", "input"))
 						PrevData.append("-1")
+						self.Settings[SETTINGS_LOGGER].debug("Sensors /sys/class/hwmon/ found: " + str(data))
 
 		if os.path.isdir("/sys/class/thermal/"):
 			arr = os.listdir("/sys/class/thermal/")
@@ -62,9 +66,11 @@ class Controller(multiprocessing.Process):
 					InputFile.append("/sys/class/thermal/" + arr[i] +  "/temp")
 					Label.append(arr[i])
 					PrevData.append("-1")
+					self.Settings[SETTINGS_LOGGER].debug("Sensors /sys/class/thermal/ found: " + str(arr[i]))
 
 		if os.path.isfile("/opt/vc/bin/vcgencmd"):
 			Raspi = True
+			self.Settings[SETTINGS_LOGGER].debug("Sensors Raspberry Pi detected")
 
 		while True:
 			time.sleep(Delay)
