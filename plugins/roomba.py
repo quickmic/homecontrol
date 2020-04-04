@@ -186,22 +186,18 @@ class RoombaEvents(multiprocessing.Process):
 											self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "pause", "1"])
 									else:
 										self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "pause", "-1"])
-
+								elif item == "state/reported/pose/point/x":
+									XData = int(ItemData)
+									DrawMap = True
+								elif item == "state/reported/pose/point/y":
+									YData = int(ItemData)
+									DrawMap = True
 								elif item.find("/sqft") != -1:
 									temp1 = item.replace("/sqft", "/sqm")
 									temp2 = "{:.2f}".format(float(ItemData) * 0.0929)
 									self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, temp1,  temp2])
 
 								self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, item, ItemData])
-
-								#Map
-								if item == "state/reported/pose/point/x":
-									XData = int(ItemData)
-									DrawMap = True
-
-								if item == "state/reported/pose/point/y":
-									YData = int(ItemData)
-									DrawMap = True
 
 						JsonData = dataTemp
 
@@ -215,7 +211,7 @@ class RoombaEvents(multiprocessing.Process):
 							MapImage.save(MapData, format='PNG')
 							MapDataHex = MapData.getvalue()
 							MapData = base64.b64encode(MapDataHex).decode()
-							self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "map", MapData])
+#							self.ComQueue[self.IDInternal].put([ROOMBA_STATUS_UPDATE, "map", MapData])
 						else:
 							MapInit = True
 

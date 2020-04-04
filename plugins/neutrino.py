@@ -64,16 +64,16 @@ class EPGUpdate(multiprocessing.Process):
 		header = '<?xml version="1.0" encoding="utf-8" ?>\n<tv>\n'
 		ChannelData = self.M3U.split("tvg-id=")
 
-		urllib.request.urlopen("http://" + self.IP + "/control/standby?off")
+		urllib.request.urlopen("http://" + self.IP + "/control/standby?off", timeout=5)
 
 		#Zap
 		for j in range(1, len(ChannelData)):
 			if ChannelData[j].find("radio=") == -1:
 				ChannelID = ChannelData[j][1:17]
-				response = urllib.request.urlopen("http://" + self.IP + "/control/zapto?" + ChannelID).read().decode(encoding='utf-8')
+				response = urllib.request.urlopen("http://" + self.IP + "/control/zapto?" + ChannelID, timeout=5).read().decode(encoding='utf-8')
 				time.sleep(3)
 
-		urllib.request.urlopen("http://" + self.IP + "/control/standby?on")
+		urllib.request.urlopen("http://" + self.IP + "/control/standby?on", timeout=5)
 		BouquetTemp = ""
 
 		for j in range(1, len(ChannelData)):
@@ -88,7 +88,7 @@ class EPGUpdate(multiprocessing.Process):
 
 			time.sleep(1)
 
-			response = urllib.request.urlopen("http://" + self.IP + "/control/epg?xml=true&channelid=" + ChannelID + "&details=true").read().decode(encoding='utf-8')
+			response = urllib.request.urlopen("http://" + self.IP + "/control/epg?xml=true&channelid=" + ChannelID + "&details=true", timeout=5).read().decode(encoding='utf-8')
 			Data = response.split("<prog>")
 			Pos = Data[0].find("<channel_name>") + 14
 			Data[0] = Data[0][Pos:]
@@ -282,7 +282,7 @@ class Controller(multiprocessing.Process):
 		urllib.request.install_opener(opener)
 
 		#create playlists
-		response = urllib.request.urlopen("http://" + IP + "/control/getbouquets").read().decode(encoding='utf-8')
+		response = urllib.request.urlopen("http://" + IP + "/control/getbouquets", timeout=5).read().decode(encoding='utf-8')
 		Counter = 0
 		M3U = "#EXTM3U\n"
 		Data = response.split("\n")
@@ -302,7 +302,7 @@ class Controller(multiprocessing.Process):
 			ID = str(int(Data[i][:2]))
 			Bouquet = Data[i][2:].strip()
 
-			response = urllib.request.urlopen("http://" + IP + "/control/getbouquet?bouquet=" + ID + "&mode=TV").read().decode(encoding='utf-8')
+			response = urllib.request.urlopen("http://" + IP + "/control/getbouquet?bouquet=" + ID + "&mode=TV", timeout=5).read().decode(encoding='utf-8')
 			Data2 = response.split("\n")
 
 			for j in range(0, len(Data2)):
@@ -332,37 +332,47 @@ class Controller(multiprocessing.Process):
 		#Request Status
 		while True:
 			IncommingData = self.ComQueue[self.IDInternal].get()
-			self.Settings[SETTINGS_LOGGER].debug("Neutrino incomming command: " + str(IncommingData))
 
 			if IncommingData[0] == NEUTRINO_EPG_FINISHED:
 				EPGUpdateProcess.join()
 			elif IncommingData[0] == NEUTRINO_STATUS_UPDATE:
 				if IncommingData[1] in CurrentStatus:
 					if CurrentStatus[IncommingData[1]] != IncommingData[2]:
+						self.Settings[SETTINGS_LOGGER].debug("Neutrino incomming command: " + str(IncommingData))
 						CurrentStatus[IncommingData[1]] = IncommingData[2]
 						self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + IncommingData[1], IncommingData[2]])
 				else:
+					self.Settings[SETTINGS_LOGGER].debug("Neutrino incomming command: " + str(IncommingData))
 					CurrentStatus[IncommingData[1]] = IncommingData[2]
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + IncommingData[1], IncommingData[2]])
 			elif IncommingData[0] == "init":
+				self.Settings[SETTINGS_LOGGER].debug("Neutrino init")
 				CurrentStatus = {}
 				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "epgupdate", "0"])
 			elif IncommingData[0] == "standby":
+				self.Settings[SETTINGS_LOGGER].debug("Neutrino standby: " + str(IncommingData[1]))
+
 				if IncommingData[1] == "1":
-					urllib.request.urlopen("http://" + IP + "/control/standby?on").read().decode(encoding='utf-8')
+					urllib.request.urlopen("http://" + IP + "/control/standby?on", timeout=5).read().decode(encoding='utf-8')
 				else:
-					urllib.request.urlopen("http://" + IP + "/control/standby?off").read().decode(encoding='utf-8')
+					urllib.request.urlopen("http://" + IP + "/control/standby?off", timeout=5).read().decode(encoding='utf-8')
 			elif IncommingData[0] == "mute":
+				self.Settings[SETTINGS_LOGGER].debug("Neutrino mute: " + str(IncommingData[1]))
+
 				if IncommingData[1] == "1":
-					urllib.request.urlopen("http://" + IP + "/control/volume?mute").read().decode(encoding='utf-8')
+					urllib.request.urlopen("http://" + IP + "/control/volume?mute", timeout=5).read().decode(encoding='utf-8')
 				else:
-					urllib.request.urlopen("http://" + IP + "/control/volume?unmute").read().decode(encoding='utf-8')
+					urllib.request.urlopen("http://" + IP + "/control/volume?unmute", timeout=5).read().decode(encoding='utf-8')
 			elif IncommingData[0] == "volume":
+				self.Settings[SETTINGS_LOGGER].debug("Neutrino volume: " + str(IncommingData[1]))
 				Temp = str(float(IncommingData[1]) * 100)
-				urllib.request.urlopen("http://" + IP + "/control/volume?" + Temp).read().decode(encoding='utf-8')
+				urllib.request.urlopen("http://" + IP + "/control/volume?" + Temp, timeout=5).read().decode(encoding='utf-8')
 			elif IncommingData[0] == "mode":
-				urllib.request.urlopen("http://" + IP + "/control/setmode?" + IncommingData[1]).read().decode(encoding='utf-8')
+				self.Settings[SETTINGS_LOGGER].debug("Neutrino standby: " + str(IncommingData[1]))
+				urllib.request.urlopen("http://" + IP + "/control/setmode?" + IncommingData[1], timeout=5).read().decode(encoding='utf-8')
 			elif IncommingData[0] == "epgupdate":
+				self.Settings[SETTINGS_LOGGER].debug("Neutrino epgupdate: " + str(IncommingData[1]))
+
 				if IncommingData[1] == "1":
 					EPGUpdateProcess.start()
 				else:

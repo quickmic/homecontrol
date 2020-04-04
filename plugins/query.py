@@ -60,7 +60,7 @@ class Controller(multiprocessing.Process):
 
 			if QueryTyp:
 				try:
-					r = urllib.request.urlopen(Query)
+					r = urllib.request.urlopen(Query, timeout=5)
 					data = r.read()
 
 					if Online != 1:

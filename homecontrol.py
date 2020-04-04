@@ -476,8 +476,14 @@ class Controller(multiprocessing.Process):
 
 					if not "#" in Subscriptions:
 						for Subscription in Subscriptions:
-							Settings[SETTINGS_LOGGER].debug("MQTT resubscribe: " + str(Subscription))
-							self.Subscribe(Subscription)
+							try:
+								Settings[SETTINGS_LOGGER].debug("MQTT resubscribe: " + str(Subscription))
+								self.Subscribe(Subscription)
+								time.sleep(0.1)
+							except:
+								Settings[SETTINGS_LOGGER].debug("MQTT resubscribe error 1")
+								Settings[SETTINGS_LOGGER].debug("MQTT resubscribe error: " + str(Subscription))
+								Settings[SETTINGS_LOGGER].debug("MQTT resubscribe error 2")
 					else:
 						self.Subscribe("#")
 						Settings[SETTINGS_LOGGER].debug("MQTT resubscribe: all")

@@ -113,16 +113,16 @@ class Controller(multiprocessing.Process):
 				except:
 					None
 
-				self.Settings[SETTINGS_LOGGER].debug("Homematic Connecting...")
+				self.Settings[SETTINGS_LOGGER].debug("Homematic Connecting... " + self.Index)
 				self.proxy = xmlrpc.client.ServerProxy('http://' + self.IP + ':' + str(self.Port))
 				time.sleep(2)
 				self.proxy.init(self.IP + ":" + str(50100 + int(self.Index)), 'homecontrol-' + self.Index)
 				Connected = True
 				self.KeepAlivePingThread = KeepAlivePing(self.ComQueue, self.IDInternal, self.Index) #Init Status Update Timer
 				self.KeepAlivePingThread.start()
-				self.Settings[SETTINGS_LOGGER].debug("Homematic Connection established...")
+				self.Settings[SETTINGS_LOGGER].debug("Homematic Connection established... " + self.Index)
 			except:
-				self.Settings[SETTINGS_LOGGER].debug("Homematic Connection failed")
+				self.Settings[SETTINGS_LOGGER].debug("Homematic Connection failed: " + self.Index)
 				time.sleep(5)
 
 	def run(self):
