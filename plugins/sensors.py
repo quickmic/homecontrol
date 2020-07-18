@@ -37,10 +37,15 @@ class Controller(multiprocessing.Process):
 		Delay = int(self.Settings["sensorsrefreshrate"])
 		IDExternal = self.Settings["sensorsid"] + "/"
 		self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "interface", self.Settings[SETTINGS_IPTOPIC]])
+		WifiDevice = []
 		Label = []
 		InputFile = []
 		PrevData = []
+		PrevRaspiGPU = ""
+		PrevWifi = []
+		PrevDMU = ""
 		Raspi = False
+		DMU = False
 
 		if os.path.isdir("/sys/class/hwmon/"):
 			arr = os.listdir("/sys/class/hwmon/")
@@ -72,14 +77,40 @@ class Controller(multiprocessing.Process):
 			Raspi = True
 			self.Settings[SETTINGS_LOGGER].debug("Sensors Raspberry Pi detected")
 
+		if os.path.isfile("/proc/dmu/temperature"):
+			DMU = True
+
+		if os.path.isfile("/usr/sbin/wl"):
+			for i in range(0, 10):
+				Temp = os.popen("/usr/sbin/wl -i eth" + str(i) + " phy_tempsense").readline()
+
+				if Temp != "":
+					WifiDevice.append(str(i))
+					PrevWifi.append("")
+
 		while True:
 			time.sleep(Delay)
+
+			if DMU:
+				File = open("/proc/dmu/temperature", "r", encoding="ISO-8859-1")
+				data = File.read()
+				data = data.replace("CPU temperature", "").strip()
+				data = data.replace(" ", "")
+				data = data.replace(":", "")
+				data = data.replace("øC", "")
+
+				if PrevDMU != data:
+					PrevDMU = data
+					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "CPU", data])
 
 			if Raspi:
 				Temp = os.popen("/opt/vc/bin/vcgencmd measure_temp").readline()
 				Temp = Temp.replace("temp=", "")
 				Temp = Temp.replace("'C\n", "")
-				self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "GPU", Temp])
+
+				if PrevRaspi != data:
+					PrevRaspi = data
+					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "GPU", Temp])
 
 			for i in range(0, len(Label)):
 				try:
@@ -97,3 +128,15 @@ class Controller(multiprocessing.Process):
 						PrevData[i] = data4
 				except:
 					None
+
+			for i in range(0, len(WifiDevice)):
+				try:
+					Temp = os.popen("/usr/sbin/wl -i eth" + WifiDevice[i] + " phy_tempsense").readline()
+					Temp = Temp[:Temp.find("(")].strip()
+
+					if PrevWifi[i] != Temp:
+						PrevWifi[i] = Temp
+						self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "temperature/wifi" + str(i), Temp])
+				except:
+					None
+
