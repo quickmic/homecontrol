@@ -99,6 +99,9 @@ class Controller(multiprocessing.Process):
 				data = data.replace(":", "")
 				data = data.replace("øC", "")
 
+				if len(data) == 3:
+					data = data[:2] + "." + data[2:3]
+
 				if PrevDMU != data:
 					PrevDMU = data
 					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "CPU", data])
