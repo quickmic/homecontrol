@@ -89,7 +89,7 @@ class Controller(multiprocessing.Process):
 				arr = os.listdir("/dev/")
 
 				for i in range(0, len(arr)):
-					if arr[i][:2] == "sd" and len(arr[i]) != 3:
+					if arr[i][:2] == "sd" and len(arr[i]) == 3:
 						Temp = os.popen("/sbin/blkid /dev/" + arr[i]).read()
 						Pos = Temp.find("UUID=")
 						Temp = Temp[Pos + 6:]
