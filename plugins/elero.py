@@ -169,9 +169,54 @@ class EleroIO(multiprocessing.Process):
 				while len(byteData) != 7:
 					byteData = byteData + os.read(FD, 1)
 
-				data = byteData[5]
+				hash = byteData[0] + byteData[1] + byteData[2] + byteData[3] + byteData[4] + byteData[5] + byteData[6]
 
-				if EleroChannels[ELERO_CHANNEL_STATUS_OLD, StatusProgress] != data:
+				#Recalculate Databyte based on checksum
+				if hash != 512 and hash != 256:
+					DataByteRestored = byteData[0] + byteData[1] + byteData[2] + byteData[3] + byteData[4] + byteData[6]
+					DataByteRestored = 512 - DataByteRestored
+					data = DataByteRestored
+				else:
+					data = byteData[5]
+
+				if EleroChannels[ELERO_CHANNEL_STATUS_OLD, StatusProgress] != data and data != ELERO_BLOCKING and data != ELERO_OVERHEATED and data != ELERO_TIMEOUT:
+					IDExternal = self.Settings["eleroid" + str(StatusProgress)] + "/"
+					Action = ""
+
+					if data == ELERO_TOP_POSITION_STOP:
+						Action = "Top"
+					elif data == ELERO_BOTTOM_POSITION_STOP:
+						Action = "Bottom"
+					elif data == ELERO_INTERMEDIATE_POSITION_STOP:
+						Action = "Intermediate"
+					elif data == ELERO_TILT_VENTILATION_POSITION_STOP:
+						Action = "Ventilation"
+					elif data == ELERO_BLOCKING:
+						Action = "Blocking"
+					elif data == ELERO_OVERHEATED:
+						Action = "Overheated"
+					elif data == ELERO_TIMEOUT:
+						Action = "Timeout"
+					elif data == ELERO_START_MOVE_UP:
+						Action = "Start Moving Up"
+					elif data == ELERO_START_MOVE_DOWN:
+						Action = "Start Moving Down"
+					elif data == ELERO_MOVING_UP:
+						Action = "Moving Up"
+					elif data == ELERO_MOVING_DOWN:
+						Action = "Moving Down"
+					elif data == ELERO_STOPPED_IN_UNDEFINED_POSITION:
+						Action = "Stop"
+					elif data == ELERO_TOP_POSITION_STOP_WHICH_IS_TILT_POSITION:
+						Action = "Top/Tilt"
+					elif data == ELERO_BOTTOM_POSITION_STOP_WHICH_IS_INTERMEDIATE_POSITION:
+						Action = "Bottom/Intermediate"
+					elif data == ELERO_SWITCH_DEVICE_OFF:
+						Action = "Off"
+					elif data == ELERO_SWITCH_DEVICE_ON:
+						Action = "On"
+
+					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "status", Action])
 					self.ComQueue[EleroChannels[ELERO_CHANNEL_ID, StatusProgress]].put([ELERO_STATUS, data]) #Send Data (Put in Queue)
 					EleroChannels[ELERO_CHANNEL_STATUS_OLD, StatusProgress] = data
 
@@ -187,6 +232,17 @@ class EleroIO(multiprocessing.Process):
 			else: #Commands
 				if len(IncommingData) > 1: #skip e.g. 'init'
 					os.write(FD, Commands[IncommingData[0]][int(IncommingData[1])])
+					Action = ""
+
+					if IncommingData[0] == ELERO_MOVING_UP:
+						Action = "Moving Up"
+					elif IncommingData[0] == ELERO_MOVING_DOWN:
+						Action = "Moving Down"
+					elif IncommingData[0] == ELERO_STOPPED_IN_UNDEFINED_POSITION:
+						Action = "Stop"
+
+					IDExternal = self.Settings["eleroid" + str(IncommingData[1])] + "/"
+					self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "status", Action])
 
 					while len(byteData) != 7:
 						byteData = byteData + os.read(FD, 1)
@@ -279,7 +335,7 @@ class Controller(multiprocessing.Process):
 		self.MovingStartTime[ELERO_MOVING_UP] = 0.0
 		self.MovingStartTime[ELERO_MOVING_DOWN] = 0.0
 		self.TimeMeasurement = 0.0
-		PositionCommand = 0.0
+		PositionCommand = -1
 		self.Position = 1.0
 		self.PositionStop = 1.0
 		Status = ELERO_STOPPED_IN_UNDEFINED_POSITION
@@ -298,18 +354,8 @@ class Controller(multiprocessing.Process):
 		self.ComQueue[ELEROIO].put([ELERO_MOVING_UP, str(ChannelID)])
 		time.sleep(self.Duration[ELERO_MOVING_UP])
 
-		#Restore previous State
-#		RestorePosition = ""
-
 		while not self.ComQueue[self.IDInternal].empty():
-#			temp = self.ComQueue[self.IDInternal].get()
 			self.ComQueue[self.IDInternal].get()
-
-#			if temp[0] == "position":
-#				RestorePosition = temp
-
-#		if RestorePosition != "":
-#			self.ComQueue[self.IDInternal].put(RestorePosition)
 
 		self.ComQueue[self.IDInternal].put([ELERO_STATUS, ELERO_REFRESH])
 
@@ -397,9 +443,14 @@ class Controller(multiprocessing.Process):
 
 				if PositionCommand != -1.0:
 					if self.Position >= PositionCommand:
-						if WaitforCommandExecution == False:
-							WaitforCommandExecution = True
-							self.ComQueue[ELEROIO].put([ELERO_STOPPED_IN_UNDEFINED_POSITION, str(ChannelID), self.Index])
+						if PositionCommand >= 0.99: #just status msg update
+							self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "status", "Top"])
+						else: #send command
+							if WaitforCommandExecution == False:
+								WaitforCommandExecution = True
+								self.ComQueue[ELEROIO].put([ELERO_STOPPED_IN_UNDEFINED_POSITION, str(ChannelID), self.Index])
+								PositionCommand = -1.0
+
 			elif Status == ELERO_MOVING_DOWN or Status == ELERO_START_MOVE_DOWN:
 				time.sleep(0.1)
 				self.ComQueue[self.IDInternal].put([ELERO_STATUS, ELERO_REFRESH])
@@ -428,9 +479,14 @@ class Controller(multiprocessing.Process):
 
 				if PositionCommand != -1.0:
 					if self.Position <= PositionCommand:
-						if WaitforCommandExecution == False:
-							WaitforCommandExecution = True
-							self.ComQueue[ELEROIO].put([ELERO_STOPPED_IN_UNDEFINED_POSITION, str(ChannelID), self.Index])
+						if PositionCommand <= 0.0: #just status msg update
+							self.ComQueue[MQTT].put([MQTT_PUBLISH, IDExternal + "status", "Bottom"])
+						else: #send command
+							if WaitforCommandExecution == False:
+								WaitforCommandExecution = True
+								self.ComQueue[ELEROIO].put([ELERO_STOPPED_IN_UNDEFINED_POSITION, str(ChannelID), self.Index])
+								PositionCommand = -1.0
+
 			elif Status == ELERO_TOP_POSITION_STOP or Status == ELERO_TOP_POSITION_STOP_WHICH_IS_TILT_POSITION:
 				self.Position = 1.0
 				self.MovingStartTime[ELERO_MOVING_UP] = 0.0
